@@ -2149,8 +2149,20 @@ namespace TransactionCodes {
     const int16_t MESSAGE_DOWNLOAD_DATA = 7021;
     const int16_t MESSAGE_DOWNLOAD_TRAILER = 7031;
     const int16_t ORDER_ENTRY_REQUEST = 2000;
+    const int16_t PRICE_CONFIRMATION = 2012;
+    const int16_t ORDER_CONFIRMATION_OUT = 2073;
+    const int16_t ORDER_CANCEL_CONFIRMATION = 2075;
+    const int16_t FREEZE_TO_CONTROL = 2170;
+    const int16_t ORDER_ERROR_OUT = 2231;
     const int16_t PRICE_MODIFICATION_REQUEST = 2013;
-    const int16_t SPREAD_ORDER_ENTRY_REQUEST = 2100;
+    const int16_t ORDER_MOD_CONFIRM_OUT = 2074;
+    const int16_t ORDER_MOD_REJ_OUT = 2042;
+    const int16_t ORDER_CANCEL_IN = 2070;
+    const int16_t ORDER_CANCEL_RESPONSE = 2071;
+    const int16_t ORDER_CXL_REJ_OUT = 2072;
+    const int16_t ORDER_CANCEL_CONFIRM_OUT = 2075;
+    const int16_t BATCH_ORDER_CANCEL = 9002;
+    const int16_t KILL_SWITCH_IN = 2062;
     const int16_t ORDER_ENTRY_REQUEST_TR = 20000;
     const int16_t ORDER_MODIFY_REQUEST_TR = 20040;
 }
@@ -2158,5 +2170,31 @@ namespace TransactionCodes {
 // Error Codes
 namespace ErrorCodes {
     const int16_t SUCCESS = 0;
+    const int16_t ERR_INVALID_ORDER_NUMBER = 16013;
+    const int16_t e$not_your_order = 16014;
     const int16_t USER_NOT_FOUND = 16042;
+    const int16_t ERR_INVALID_TRADER_ID = 16154;
+    const int16_t OE_IS_NOT_ACTIVE = 16285;
+    const int16_t OE_QTY_FREEZE_CAN = 16307;
+    const int16_t OE_PRICE_FREEZE_CAN = 16308;
+    const int16_t OE_ORD_CANNOT_CANCEL = 16344;
+    const int16_t OE_ORD_CANNOT_MODIFY = 16346;
+    const int16_t INVALID_ORDER = 16419;
+    const int16_t CLOSEOUT_ORDER_REJECT = 16686;
+    const int16_t CLOSEOUT_NOT_ALLOWED = 16688;
+    const int16_t CLOSEOUT_TRDMOD_REJECT = 16690;
+}
+
+// Reason Codes
+namespace ReasonCodes {
+    const int16_t NORMAL_CONFIRMATION = 0;
+    const int16_t PRICE_FREEZE = 17;
+    const int16_t QUANTITY_FREEZE = 18;
+}
+
+// Broker Types
+namespace BrokerTypes {
+    const char CORPORATE_MANAGER = 'C';
+    const char BRANCH_MANAGER = 'B';
+    const char DEALER = 'D';
 }

@@ -26,6 +26,11 @@ public:
     void set_market_status(bool normal_open, bool oddlot_open, bool spot_open, bool auction_open);
     void get_current_market_status(ST_MARKET_STATUS& status, ST_EX_MARKET_STATUS& ex_status, ST_PL_MARKET_STATUS& pl_status) const;
 
+    // Broker management
+    void set_broker_closeout_status(const std::string& broker_id, bool is_closeout);
+    void set_broker_deactivated_status(const std::string& broker_id, bool is_deactivated);
+    void set_broker_type(const std::string& broker_id, char broker_type);
+
     // Message handlers
     void handle_signon_request(const MS_SIGNON_REQUEST_IN* req, uint64_t ts);
     void handle_signoff_request(const MS_SIGNOFF* req, uint64_t ts);
@@ -35,6 +40,8 @@ public:
     void handle_message_download(const MS_MESSAGE_DOWNLOAD* req, uint64_t ts);
     void handle_order_entry_request(const MS_OE_REQUEST* req, uint64_t ts);
     void handle_price_modification_request(const PRICE_MOD* req, uint64_t ts);
+    void handle_order_cancellation_request(const MS_OE_REQUEST* req, uint64_t ts);
+    void handle_kill_switch_request(const MS_OE_REQUEST* req, uint64_t ts);
     void handle_spread_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
     
 private:
@@ -42,6 +49,12 @@ private:
     std::map<int32_t, int32_t> trader_last_logoff_time_;
 
     std::function<void(const uint8_t*, size_t)> message_callback_;
+
+    std::map<std::string, bool> broker_closeout_status_;
+    std::map<std::string, bool> broker_deactivated_status_;
+    std::map<std::string, char> broker_types_;
+
+    std::map<double, MS_OE_REQUEST> active_orders_;
 
     ST_MARKET_STATUS current_market_status_;
     ST_EX_MARKET_STATUS current_ex_market_status_;
@@ -57,6 +70,24 @@ private:
     void send_update_local_database_response(const MS_UPDATE_LOCAL_DATABASE* req, uint64_t ts, int16_t error_code);
     void send_exchange_portfolio_response(const EXCH_PORTFOLIO_REQ* req, uint64_t ts, int16_t error_code);
     void send_message_download_response(const MS_MESSAGE_DOWNLOAD* req, uint64_t ts, int16_t error_code);
+    void send_order_response(const MS_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code, int16_t reason_code = ReasonCodes::NORMAL_CONFIRMATION);
+    void send_modification_response(const PRICE_MOD* req, uint64_t ts, int16_t transaction_code, int16_t error_code);
+    void send_cancellation_response(const MS_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code);
+    void send_kill_switch_response(const MS_OE_REQUEST* req, uint64_t ts, int16_t error_code, int32_t cancelled_count = 0);
 
+    // Helper methods
     bool validate_trader_market_status(const MS_UPDATE_LOCAL_DATABASE* req);
+    bool is_broker_in_closeout(const std::string& broker_id) const;
+    bool is_valid_closeout_order(const MS_OE_REQUEST* req) const;
+    double generate_order_number(uint64_t ts);
+    bool is_valid_modification(const MS_OE_REQUEST& original_order, const PRICE_MOD* modification) const;
+    bool is_time_priority_lost(const MS_OE_REQUEST* original_order, const PRICE_MOD* modification) const;
+    uint64_t generate_activity_reference(uint64_t ts);
+    void process_successful_modification(MS_OE_REQUEST& original_order, const PRICE_MOD* req, uint64_t ts);
+    bool is_broker_deactivated(const std::string& broker_id) const;
+    bool can_cancel_order(const std::string& canceller_broker_id, const std::string& order_broker_id) const;
+    bool is_valid_activity_reference(const MS_OE_REQUEST* order, const MS_OE_REQUEST* cancel_req) const;
+    void process_successful_cancellation(MS_OE_REQUEST& original_order, const MS_OE_REQUEST* cancel_req, uint64_t ts);
+    int32_t process_kill_switch_cancellation(const MS_OE_REQUEST* req, uint64_t ts);
+    bool is_contract_match(const MS_OE_REQUEST* order, const CONTRACT_DESC* contract) const;
 };

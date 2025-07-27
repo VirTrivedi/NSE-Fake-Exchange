@@ -296,6 +296,23 @@ struct MS_MESSAGE_DOWNLOAD {
     double SequenceNumber;
 };
 
+struct MS_MESSAGE_DOWNLOAD_HEADER {
+    MESSAGE_HEADER Header;
+};
+
+struct MS_MESSAGE_DOWNLOAD_DATA {
+    MESSAGE_HEADER Header;
+    MESSAGE_HEADER InnerHeader;
+    char InnerData[400];
+};
+
+struct MS_MESSAGE_DOWNLOAD_TRAILER {
+    MESSAGE_HEADER Header;
+};
+
+struct MS_SIGNOFF {
+    MESSAGE_HEADER Header;
+};
 
 struct SIGNOFF_OUT {
     MESSAGE_HEADER Header;
@@ -2116,11 +2133,21 @@ struct MS_TRADE_CONFIRM_TR {
 namespace TransactionCodes {
     const int16_t SIGNON_REQUEST_IN = 2300;
     const int16_t SIGNON_REQUEST_OUT = 2301;
+    const int16_t SIGN_OFF_REQUEST_IN = 2320;
+    const int16_t SIGN_OFF_REQUEST_OUT = 2321;
     const int16_t SYSTEM_INFO_REQUEST = 1600;
     const int16_t SYSTEM_INFO_DATA = 1601;
     const int16_t UPDATE_LOCAL_DATABASE = 7300;
+    const int16_t UPDATE_LOCAL_DATABASE_HEADER = 7307;
+    const int16_t UPDATE_LOCAL_DATABASE_DATA = 7304;
+    const int16_t BCAST_PART_MSTR_CHG = 7306;
+    const int16_t PARTIAL_SYSTEM_INFORMATION = 7321;
     const int16_t EXCHANGE_PORTFOLIO_REQUEST = 1775;
+    const int16_t EXCHANGE_PORTFOLIO_RESPONSE = 1776;
     const int16_t MESSAGE_DOWNLOAD = 7000;
+    const int16_t MESSAGE_DOWNLOAD_HEADER = 7011;
+    const int16_t MESSAGE_DOWNLOAD_DATA = 7021;
+    const int16_t MESSAGE_DOWNLOAD_TRAILER = 7031;
     const int16_t ORDER_ENTRY_REQUEST = 2000;
     const int16_t PRICE_MODIFICATION_REQUEST = 2013;
     const int16_t SPREAD_ORDER_ENTRY_REQUEST = 2100;

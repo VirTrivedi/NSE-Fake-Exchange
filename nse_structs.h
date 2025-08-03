@@ -2165,6 +2165,13 @@ namespace TransactionCodes {
     const int16_t KILL_SWITCH_IN = 2062;
     const int16_t ORDER_ENTRY_REQUEST_TR = 20000;
     const int16_t ORDER_MODIFY_REQUEST_TR = 20040;
+    const int16_t TRADE_MOD_IN = 5445;
+    const int16_t TRADE_ERROR = 2223; 
+    const int16_t TRADE_CANCEL_IN = 5440;
+    const int16_t TRADE_CANCEL_OUT = 5441;
+    const int16_t SP_BOARD_LOT_IN = 2100;
+    const int16_t SP_ORDER_CONFIRMATION = 2124;
+    const int16_t SP_ORDER_ERROR = 2154;
 }
 
 // Error Codes
@@ -2183,6 +2190,13 @@ namespace ErrorCodes {
     const int16_t CLOSEOUT_ORDER_REJECT = 16686;
     const int16_t CLOSEOUT_NOT_ALLOWED = 16688;
     const int16_t CLOSEOUT_TRDMOD_REJECT = 16690;
+    const int16_t MARKET_CLOSED = 16000;
+    const int16_t e$gtc_gtd_ord_not_allowed_pclose = 16229;
+    const int16_t e$invalid_contract_comb = 16627; 
+    const int16_t e$invalid_pro_client = 16414;
+    const int16_t e$invalid_cli_ac = 16632;
+    const int16_t OE_QUANTITY_NOT_MULT_RL = 16328;
+    const int16_t e$price_diff_out_of_range = 16713;
 }
 
 // Reason Codes

@@ -208,6 +208,118 @@ bool FakeNSEExchange::is_contract_match(const MS_OE_REQUEST* order, const CONTRA
     return true;
 }
 
+std::string FakeNSEExchange::generate_trade_request_key(int32_t fill_number, int32_t trader_id, const std::string& operation) {
+    return operation + "_" + std::to_string(fill_number) + "_" + std::to_string(trader_id);
+}
+
+bool FakeNSEExchange::is_duplicate_trade_request(int32_t fill_number, int32_t trader_id, const std::string& operation) {
+    std::string key = generate_trade_request_key(fill_number, trader_id, operation);
+    
+    if (operation == "modify") {
+        return trade_modification_requests_.find(key) != trade_modification_requests_.end();
+    } else if (operation == "cancel") {
+        return trade_cancellation_requests_.find(key) != trade_cancellation_requests_.end();
+    }
+    
+    return false;
+}
+
+void FakeNSEExchange::mark_trade_request(int32_t fill_number, int32_t trader_id, const std::string& operation) {
+    std::string key = generate_trade_request_key(fill_number, trader_id, operation);
+    
+    if (operation == "modify") {
+        trade_modification_requests_.insert(key);
+    } else if (operation == "cancel") {
+        trade_cancellation_requests_.insert(key);
+    }
+}
+
+bool FakeNSEExchange::is_trade_owner(const MS_TRADE_INQ_DATA& trade, int32_t trader_id, const std::string& broker_id) {
+    // Check if trader ID matches (as per documentation)
+    if (trade.TraderId == trader_id) {
+        return true;
+    }
+    
+    // Check if broker ID matches (for hierarchy as per documentation)
+    std::string trade_buy_broker(trade.BuyBrokerId, 5);
+    std::string trade_sell_broker(trade.SellBrokerId, 5);
+    trade_buy_broker.erase(trade_buy_broker.find_last_not_of(' ') + 1);
+    trade_sell_broker.erase(trade_sell_broker.find_last_not_of(' ') + 1);
+    
+    return (broker_id == trade_buy_broker || broker_id == trade_sell_broker);
+}
+
+bool FakeNSEExchange::is_valid_pro_order(int16_t pro_client_indicator, const std::string& account_number, const std::string& broker_id) const {
+    if (pro_client_indicator != 2) { // Not a PRO order
+        return true;
+    }
+    
+    // For PRO orders, account number should be empty or same as broker ID
+    return (account_number.empty() || account_number == broker_id);
+}
+
+bool FakeNSEExchange::is_valid_cli_order(int16_t pro_client_indicator, const std::string& account_number, const std::string& broker_id) const {
+    if (pro_client_indicator != 1) { // Not a CLI order
+        return true;
+    }
+    
+    // For CLI orders, account number cannot be the broker ID
+    return (!account_number.empty() && account_number != broker_id);
+}
+
+bool FakeNSEExchange::is_valid_trade_modification(const MS_TRADE_INQ_DATA* req) const {
+    // Basic validation of trade modification request
+    
+    // FillNumber must be positive
+    if (req->FillNumber <= 0) {
+        std::cout << "Invalid FillNumber: " << req->FillNumber << std::endl;
+        return false;
+    }
+    
+    // FillQuantity must be positive
+    if (req->FillQuantity <= 0) {
+        std::cout << "Invalid FillQuantity: " << req->FillQuantity << std::endl;
+        return false;
+    }
+    
+    // FillPrice must be positive
+    if (req->FillPrice <= 0) {
+        std::cout << "Invalid FillPrice: " << req->FillPrice << std::endl;
+        return false;
+    }
+    
+    // TokenNo must be valid
+    if (req->TokenNo <= 0) {
+        std::cout << "Invalid TokenNo: " << req->TokenNo << std::endl;
+        return false;
+    }
+    
+    // MktType must be valid (1-4)
+    if (req->MktType < '1' || req->MktType > '4') {
+        std::cout << "Invalid MktType: " << req->MktType << std::endl;
+        return false;
+    }
+    
+    // Validate Open/Close indicators
+    if (req->BuyOpenClose != 'O' && req->BuyOpenClose != 'C') {
+        std::cout << "Invalid BuyOpenClose: " << req->BuyOpenClose << std::endl;
+        return false;
+    }
+    
+    if (req->SellOpenClose != 'O' && req->SellOpenClose != 'C') {
+        std::cout << "Invalid SellOpenClose: " << req->SellOpenClose << std::endl;
+        return false;
+    }
+    
+    return true;
+}
+
+bool FakeNSEExchange::trade_exists(int32_t fill_number) const {
+    // Check if the trade exists in our executed trades map
+    auto it = executed_trades_.find(fill_number);
+    return (it != executed_trades_.end());
+}
+
 // Parses the incoming buffer and dispatches messages to appropriate handlers
 size_t FakeNSEExchange::parse(const uint8_t* buf, size_t buflen, uint64_t ts, bool& error) {
     error = false;
@@ -361,13 +473,33 @@ size_t FakeNSEExchange::try_parse_message(const uint8_t* buf, size_t remaining, 
             break;
         }
 
+        case TransactionCodes::TRADE_MOD_IN: {
+            if (header->MessageLength < sizeof(MS_TRADE_INQ_DATA)) {
+                error = true;
+                return 0;
+            }
+            const MS_TRADE_INQ_DATA* req = reinterpret_cast<const MS_TRADE_INQ_DATA*>(buf);
+            handle_trade_modification_request(req, ts);
+            break;
+        }
+
+        case TransactionCodes::TRADE_CANCEL_IN: {
+            if (header->MessageLength < sizeof(MS_TRADE_INQ_DATA)) {
+                error = true;
+                return 0;
+            }
+            const MS_TRADE_INQ_DATA* req = reinterpret_cast<const MS_TRADE_INQ_DATA*>(buf);
+            handle_trade_cancellation_request(req, ts);
+            break;
+        }
+
         default:
             std::cout << "Unknown transaction code: " << header->TransactionCode << std::endl;
             break;
     }
     
     return header->MessageLength;
-}
+} 
 
 void FakeNSEExchange::handle_signon_request(const MS_SIGNON_REQUEST_IN* req, uint64_t ts) {
     std::cout << "Sign-on request from trader: " << req->Header.TraderId 
@@ -390,7 +522,7 @@ void FakeNSEExchange::handle_signon_request(const MS_SIGNON_REQUEST_IN* req, uin
         logoff_confirmation.Header.ErrorCode = ErrorCodes::SUCCESS;
         logoff_confirmation.Header.MessageLength = sizeof(SIGNOFF_OUT);
         logoff_confirmation.UserId = req->Header.TraderId;
-        
+         
         if (message_callback_) {
             message_callback_(reinterpret_cast<const uint8_t*>(&logoff_confirmation), sizeof(logoff_confirmation));
         }
@@ -462,7 +594,7 @@ void FakeNSEExchange::handle_signoff_request(const MS_SIGNOFF* req, uint64_t ts)
     if (logged_in_traders_.find(req->Header.TraderId) == logged_in_traders_.end()) {
         std::cout << "Trader " << req->Header.TraderId << " not logged in for sign-off request" << std::endl;
         // Send error response
-        send_signoff_response(req, ts, ErrorCodes::USER_NOT_FOUND);
+        send_signoff_response(req, ts, ErrorCodes::USER_NOT_FOUND); 
         return;
     }
     
@@ -1470,6 +1602,382 @@ void FakeNSEExchange::send_kill_switch_response(const MS_OE_REQUEST* req, uint64
               << ", ErrorCode: " << error_code << std::endl;
     
     // Send error response via callback
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
+    }
+}
+
+void FakeNSEExchange::handle_trade_modification_request(const MS_TRADE_INQ_DATA* req, uint64_t ts) {
+    std::cout << "Trade modification request from trader: " << req->Header.TraderId 
+              << " - FillNumber: " << req->FillNumber 
+              << ", RequestedBy: " << static_cast<int>(req->RequestedBy) << std::endl;
+    
+    // Check if trader is logged in
+    if (logged_in_traders_.find(req->Header.TraderId) == logged_in_traders_.end()) {
+        std::cout << "Trader " << req->Header.TraderId << " not logged in for trade modification" << std::endl;
+        send_trade_modification_response(req, ts, ErrorCodes::USER_NOT_FOUND);
+        return;
+    }
+    
+    // Check for duplicate request
+    if (is_duplicate_trade_request(req->FillNumber, req->Header.TraderId, "modify")) {
+        std::cout << "Duplicate trade modification request for FillNumber: " << req->FillNumber << std::endl;
+        send_trade_modification_response(req, ts, ErrorCodes::e_dup_request);
+        return;
+    }
+    
+    // Check if trade exists
+    auto trade_iter = executed_trades_.find(req->FillNumber);
+    if (trade_iter == executed_trades_.end()) {
+        std::cout << "Trade " << req->FillNumber << " not found for modification" << std::endl;
+        send_trade_modification_response(req, ts, ErrorCodes::E_invalid_fill_number);
+        return;
+    }
+    
+    MS_TRADE_INQ_DATA& existing_trade = trade_iter->second;
+    
+    // Check if trader owns this trade
+    std::string broker_id(req->BuyBrokerId, 5);
+    if (!is_trade_owner(existing_trade, req->Header.TraderId, broker_id)) {
+        std::cout << "Trade " << req->FillNumber << " does not belong to trader " << req->Header.TraderId << std::endl;
+        send_trade_modification_response(req, ts, ErrorCodes::E_not_your_fill);
+        return;
+    }
+    
+    // Check if user is allowed to modify trades (documentation validation)
+    // The documentation doesn't specify additional user-level restrictions beyond ownership
+    // so we just check basic ownership and broker status
+    
+    // Check broker closeout status
+    std::string buy_broker_id(req->BuyBrokerId, 5);
+    buy_broker_id.erase(buy_broker_id.find_last_not_of(' ') + 1);
+    
+    if (is_broker_in_closeout(buy_broker_id)) {
+        std::cout << "Trade modification restricted - broker " << buy_broker_id << " in closeout status" << std::endl;
+        send_trade_modification_response(req, ts, ErrorCodes::CLOSEOUT_TRDMOD_REJECT);
+        return;
+    }
+    
+    // Validate modification request
+    if (req->RequestedBy != '1' && req->RequestedBy != '2' && req->RequestedBy != '3') {
+        std::cout << "Invalid RequestedBy field: " << static_cast<int>(req->RequestedBy) << std::endl;
+        send_trade_modification_response(req, ts, ErrorCodes::INVALID_ORDER);
+        return;
+    }
+    
+    // Check if quantities match (NSE requirement for trade modification)
+    if (req->FillQuantity != existing_trade.FillQuantity) {
+        std::cout << "Trade modification with different quantities not allowed" << std::endl;
+        send_trade_modification_response(req, ts, ErrorCodes::OE_DIFF_TRD_MOD_VOL);
+        return;
+    }
+    
+    // Check if only client account modification is being attempted
+    bool buy_account_changed = (strncmp(req->BuyAccountNumber, existing_trade.BuyAccountNumber, 10) != 0);
+    bool sell_account_changed = (strncmp(req->SellAccountNumber, existing_trade.SellAccountNumber, 10) != 0);
+    
+    if (!buy_account_changed && !sell_account_changed) {
+        std::cout << "No account number changes detected in trade modification request" << std::endl;
+        send_trade_modification_response(req, ts, ErrorCodes::ERR_DATA_NOT_CHANGED);
+        return;
+    }
+    
+    // Simulate successful modification
+    std::cout << "Trade modification accepted for FillNumber: " << req->FillNumber << std::endl;
+    
+    // Update the trade record
+    if (req->RequestedBy == '1' || req->RequestedBy == '3') { // Buy side or both
+        strncpy(existing_trade.BuyAccountNumber, req->BuyAccountNumber, sizeof(existing_trade.BuyAccountNumber));
+    }
+    if (req->RequestedBy == '2' || req->RequestedBy == '3') { // Sell side or both
+        strncpy(existing_trade.SellAccountNumber, req->SellAccountNumber, sizeof(existing_trade.SellAccountNumber));
+    }
+    
+    // Mark request as processed
+    mark_trade_request(req->FillNumber, req->Header.TraderId, "modify");
+    
+    // Send successful response
+    send_trade_modification_response(req, ts, ErrorCodes::SUCCESS);
+}
+
+void FakeNSEExchange::send_trade_modification_response(const MS_TRADE_INQ_DATA* req, uint64_t ts, int16_t error_code) {
+    MS_TRADE_INQ_DATA response;
+    memset(&response, 0, sizeof(response));
+    
+    // Copy request and modify header
+    response = *req;
+    
+    if (error_code == ErrorCodes::SUCCESS) {
+        response.Header.TransactionCode = TransactionCodes::TRADE_MOD_IN; // Success uses same code
+        response.Header.ErrorCode = ErrorCodes::SUCCESS;
+        
+        std::cout << "Sending successful trade modification response to trader: " << req->Header.TraderId 
+                  << ", FillNumber: " << req->FillNumber << std::endl;
+    } else {
+        response.Header.TransactionCode = TransactionCodes::TRADE_ERROR;
+        response.Header.ErrorCode = error_code;
+        
+        std::cout << "Sending trade modification error response to trader: " << req->Header.TraderId 
+                  << ", FillNumber: " << req->FillNumber 
+                  << ", ErrorCode: " << error_code << std::endl;
+    }
+    
+    response.Header.MessageLength = sizeof(MS_TRADE_INQ_DATA);
+    
+    // Send response via callback
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
+    }
+}
+
+void FakeNSEExchange::handle_trade_cancellation_request(const MS_TRADE_INQ_DATA* req, uint64_t ts) {
+    std::cout << "Trade cancellation request from trader: " << req->Header.TraderId 
+              << " - FillNumber: " << req->FillNumber << std::endl;
+    
+    // Check if trader is logged in
+    if (logged_in_traders_.find(req->Header.TraderId) == logged_in_traders_.end()) {
+        std::cout << "Trader " << req->Header.TraderId << " not logged in for trade cancellation" << std::endl;
+        send_trade_cancellation_response(req, ts, ErrorCodes::USER_NOT_FOUND);
+        return;
+    }
+    
+    // Check for duplicate request
+    if (is_duplicate_trade_request(req->FillNumber, req->Header.TraderId, "cancel")) {
+        std::cout << "Duplicate trade cancellation request for FillNumber: " << req->FillNumber << std::endl;
+        send_trade_cancellation_response(req, ts, ErrorCodes::e_dup_trd_cxl_request);
+        return;
+    }
+    
+    // Check if trade exists
+    auto trade_iter = executed_trades_.find(req->FillNumber);
+    if (trade_iter == executed_trades_.end()) {
+        std::cout << "Trade " << req->FillNumber << " not found for cancellation" << std::endl;
+        send_trade_cancellation_response(req, ts, ErrorCodes::E_invalid_fill_number);
+        return;
+    }
+    
+    MS_TRADE_INQ_DATA& existing_trade = trade_iter->second;
+    
+    // Check if trader owns this trade
+    std::string broker_id(req->BuyBrokerId, 5);
+    if (!is_trade_owner(existing_trade, req->Header.TraderId, broker_id)) {
+        std::cout << "Trade " << req->FillNumber << " does not belong to trader " << req->Header.TraderId << std::endl;
+        send_trade_cancellation_response(req, ts, ErrorCodes::E_not_your_fill);
+        return;
+    }
+    
+    // Note: Trade cancellation requires both parties to request it
+    // This is a simplified implementation - in reality, you'd need to track
+    // both party requests and only cancel when both have requested
+    
+    std::cout << "Trade cancellation request logged for FillNumber: " << req->FillNumber << std::endl;
+    std::cout << "Note: Both parties must request cancellation for it to be processed" << std::endl;
+    
+    // Mark request as processed
+    mark_trade_request(req->FillNumber, req->Header.TraderId, "cancel");
+    
+    // Send acknowledgment response
+    send_trade_cancellation_response(req, ts, ErrorCodes::SUCCESS);
+}
+
+void FakeNSEExchange::send_trade_cancellation_response(const MS_TRADE_INQ_DATA* req, uint64_t ts, int16_t error_code) {
+    MS_TRADE_INQ_DATA response;
+    memset(&response, 0, sizeof(response));
+    
+    // Copy request and modify header
+    response = *req;
+    
+    if (error_code == ErrorCodes::SUCCESS) {
+        response.Header.TransactionCode = TransactionCodes::TRADE_CANCEL_OUT;
+        response.Header.ErrorCode = ErrorCodes::SUCCESS;
+        
+        std::cout << "Sending trade cancellation acknowledgment to trader: " << req->Header.TraderId 
+                  << ", FillNumber: " << req->FillNumber << std::endl;
+    } else {
+        response.Header.TransactionCode = TransactionCodes::TRADE_ERROR;
+        response.Header.ErrorCode = error_code;
+        
+        std::cout << "Sending trade cancellation error response to trader: " << req->Header.TraderId 
+                  << ", FillNumber: " << req->FillNumber 
+                  << ", ErrorCode: " << error_code << std::endl;
+    }
+    
+    response.Header.MessageLength = sizeof(MS_TRADE_INQ_DATA);
+    
+    // Send response via callback
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
+    }
+}
+
+void FakeNSEExchange::handle_spread_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts) {
+    std::cout << "Spread order entry request from trader: " << req->Header.TraderId 
+              << " - Token1: " << req->Token1 
+              << ", Token2: " << req->MS_SPD_LEG_INFO_leg2.Token2 << std::endl;
+    
+    // User is unable to log into the trading system
+    if (logged_in_traders_.find(req->Header.TraderId) == logged_in_traders_.end()) {
+        std::cout << "Trader " << req->Header.TraderId << " not logged in" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, ErrorCodes::USER_NOT_FOUND);
+        return;
+    }
+    
+    // Order is of GTC or GTD order type
+    if (req->OrderFlags.GTC || req->GoodTillDate1 != 0) {
+        std::cout << "GTC/GTD orders not allowed for spread orders" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, 16229); // e$gtc_gtd_ord_not_allowed_pclose
+        return;
+    }
+    
+    // Markets are closed
+    if (current_market_status_.Normal != 1) {
+        std::cout << "Market is not open for spread orders" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, 16000); // MARKET_CLOSED
+        return;
+    }
+    
+    // Get broker ID
+    std::string broker_id(req->BrokerId1, 5);
+    broker_id.erase(broker_id.find_last_not_of(' ') + 1);
+    
+    // Broker is suspended
+    if (is_broker_in_closeout(broker_id)) {
+        std::cout << "Broker " << broker_id << " is suspended" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, ErrorCodes::CLOSEOUT_ORDER_REJECT);
+        return;
+    }
+    
+    // Broker is deactivated
+    if (is_broker_deactivated(broker_id)) {
+        std::cout << "Broker " << broker_id << " is deactivated" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, ErrorCodes::OE_IS_NOT_ACTIVE);
+        return;
+    }
+    
+    // IOC orders not allowed for spreads
+    if (req->OrderFlags.IOC) {
+        std::cout << "IOC orders not allowed for spread orders" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, ErrorCodes::INVALID_ORDER);
+        return;
+    }
+    
+    // Disclosed quantity not allowed for spreads
+    if (req->DisclosedVol1 > 0 || req->MS_SPD_LEG_INFO_leg2.DisclosedVol2 > 0) {
+        std::cout << "Disclosed quantity not allowed for spread orders" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, ErrorCodes::INVALID_ORDER);
+        return;
+    }
+    
+    // Both contracts cannot have same expiry date
+    if (req->ContractDesc.ExpiryDate == req->MS_SPD_LEG_INFO_leg2.ContractDesc.ExpiryDate) {
+        std::cout << "Both legs cannot have same expiry date" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, 16627); // e$invalid_contract_comb
+        return;
+    }
+    
+    // Get account number
+    std::string account(req->AccountNumber1, 10);
+    account.erase(account.find_last_not_of(' ') + 1);
+    
+    // PRO order validation
+    if (!is_valid_pro_order(req->ProClient1, account, broker_id)) {
+        std::cout << "Invalid PRO order configuration" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, 16414); // e$invalid_pro_client
+        return;
+    }
+    
+    // CLI order validation
+    if (!is_valid_cli_order(req->ProClient1, account, broker_id)) {
+        std::cout << "Invalid CLI order configuration" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, 16632); // e$invalid_cli_ac
+        return;
+    }
+    
+    // Quantity validation - must be multiple of regular lot
+    const int32_t REGULAR_LOT = 1;
+    if (req->Volume1 % REGULAR_LOT != 0 || req->MS_SPD_LEG_INFO_leg2.Volume2 % REGULAR_LOT != 0) {
+        std::cout << "Quantity must be multiple of regular lot" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, 16328); // OE_QUANTITY_NOT_MULT_RL
+        return;
+    }
+    
+    // Price difference validation - must be within operating range
+    const int32_t MAX_PRICE_DIFF = 99999999;
+    if (abs(req->PriceDiff) > MAX_PRICE_DIFF) {
+        std::cout << "Price difference beyond operating range" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, 16713); // e$price_diff_out_of_range
+        return;
+    }
+    
+    // Continue with order processing...
+    int outcome = rand() % 100;
+    if (outcome < 70) {
+        std::cout << "Spread order confirmed normally" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_CONFIRMATION, ErrorCodes::SUCCESS);
+    } else if (outcome < 85) {
+        std::cout << "Spread order frozen - awaiting exchange approval" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::FREEZE_TO_CONTROL, ErrorCodes::SUCCESS, ReasonCodes::PRICE_FREEZE);
+    } else {
+        std::cout << "Spread order rejected due to validation error" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, ErrorCodes::INVALID_ORDER);
+    }
+}
+
+void FakeNSEExchange::send_spread_order_response(const MS_SPD_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code, int16_t reason_code) {
+    MS_SPD_OE_REQUEST response;
+    memset(&response, 0, sizeof(response));
+    
+    // Copy original request structure and modify header
+    response = *req;
+    response.Header.TransactionCode = transaction_code;
+    response.Header.ErrorCode = error_code;
+    response.Header.MessageLength = sizeof(MS_SPD_OE_REQUEST);
+    
+    // Set reason code
+    response.ReasonCode1 = reason_code;
+    
+    // Set entry date time for confirmed orders
+    if (transaction_code == TransactionCodes::SP_ORDER_CONFIRMATION) {
+        response.EntryDateTime1 = static_cast<int32_t>(ts / 1000000);
+    }
+    
+    // Generate order number and activity reference for confirmed orders
+    if (transaction_code == TransactionCodes::SP_ORDER_CONFIRMATION) {
+        response.OrderNumber1 = generate_order_number(ts);
+        response.LastActivityReference = generate_activity_reference(ts);
+        response.LastModified1 = static_cast<int32_t>(ts / 1000000);
+        
+        std::cout << "Generated spread order number: " << response.OrderNumber1 << std::endl;
+    }
+    
+    // Set closeout flag if applicable
+    if (transaction_code == TransactionCodes::SP_ORDER_CONFIRMATION || 
+        transaction_code == TransactionCodes::SP_ORDER_ERROR) {
+        
+        std::string broker_id(req->BrokerId1, 5);
+        broker_id.erase(broker_id.find_last_not_of(' ') + 1);
+        
+        if (is_broker_in_closeout(broker_id)) {
+            response.CloseoutFlag = 'C';
+        }
+    }
+    
+    // Log the response
+    std::cout << "Sending spread order response: TransactionCode=" << transaction_code 
+              << ", ErrorCode=" << error_code 
+              << ", ReasonCode=" << reason_code;
+    
+    if (transaction_code == TransactionCodes::SP_ORDER_CONFIRMATION) {
+        std::cout << ", OrderNumber=" << response.OrderNumber1;
+    }
+    
+    if (response.CloseoutFlag == 'C') {
+        std::cout << ", CloseoutFlag=C";
+    }
+    
+    std::cout << std::endl;
+    
+    // Send response via callback
     if (message_callback_) {
         message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
     }

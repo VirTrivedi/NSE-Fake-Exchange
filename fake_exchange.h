@@ -43,6 +43,10 @@ public:
     void handle_order_cancellation_request(const MS_OE_REQUEST* req, uint64_t ts);
     void handle_kill_switch_request(const MS_OE_REQUEST* req, uint64_t ts);
     void handle_spread_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
+    void handle_trade_modification_request(const MS_TRADE_INQ_DATA* req, uint64_t ts);
+    void handle_trade_cancellation_request(const MS_TRADE_INQ_DATA* req, uint64_t ts);
+    void handle_spread_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
+    
     
 private:
     std::set<int32_t> logged_in_traders_;
@@ -55,6 +59,10 @@ private:
     std::map<std::string, char> broker_types_;
 
     std::map<double, MS_OE_REQUEST> active_orders_;
+
+    std::map<int32_t, MS_TRADE_INQ_DATA> executed_trades_;
+    std::set<std::string> trade_modification_requests_;
+    std::set<std::string> trade_cancellation_requests_;
 
     ST_MARKET_STATUS current_market_status_;
     ST_EX_MARKET_STATUS current_ex_market_status_;
@@ -74,6 +82,9 @@ private:
     void send_modification_response(const PRICE_MOD* req, uint64_t ts, int16_t transaction_code, int16_t error_code);
     void send_cancellation_response(const MS_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code);
     void send_kill_switch_response(const MS_OE_REQUEST* req, uint64_t ts, int16_t error_code, int32_t cancelled_count = 0);
+    void send_trade_modification_response(const MS_TRADE_INQ_DATA* req, uint64_t ts, int16_t transaction_code, int16_t error_code);
+    void send_trade_cancellation_response(const MS_TRADE_INQ_DATA* req, uint64_t ts, int16_t transaction_code, int16_t error_code);
+    void send_spread_order_response(const MS_SPD_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code, int16_t reason_code) {
 
     // Helper methods
     bool validate_trader_market_status(const MS_UPDATE_LOCAL_DATABASE* req);
@@ -90,4 +101,10 @@ private:
     void process_successful_cancellation(MS_OE_REQUEST& original_order, const MS_OE_REQUEST* cancel_req, uint64_t ts);
     int32_t process_kill_switch_cancellation(const MS_OE_REQUEST* req, uint64_t ts);
     bool is_contract_match(const MS_OE_REQUEST* order, const CONTRACT_DESC* contract) const;
+    bool is_valid_pro_order(int16_t pro_client_indicator, const std::string& account_number, const std::string& broker_id) const;
+    bool is_valid_cli_order(int16_t pro_client_indicator, const std::string& account_number, const std::string& broker_id) const;
+    std::string generate_trade_request_key(int32_t fill_number, int32_t trader_id, const std::string& operation);
+    bool is_duplicate_trade_request(int32_t fill_number, int32_t trader_id, const std::string& operation);
+    void mark_trade_request(int32_t fill_number, int32_t trader_id, const std::string& operation);
+    bool is_trade_owner(const MS_TRADE_INQ_DATA& trade, int32_t trader_id, const std::string& broker_id);
 };

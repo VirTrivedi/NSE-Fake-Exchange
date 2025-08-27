@@ -314,12 +314,6 @@ bool FakeNSEExchange::is_valid_trade_modification(const MS_TRADE_INQ_DATA* req) 
     return true;
 }
 
-bool FakeNSEExchange::trade_exists(int32_t fill_number) const {
-    // Check if the trade exists in our executed trades map
-    auto it = executed_trades_.find(fill_number);
-    return (it != executed_trades_.end());
-}
-
 // Parses the incoming buffer and dispatches messages to appropriate handlers
 size_t FakeNSEExchange::parse(const uint8_t* buf, size_t buflen, uint64_t ts, bool& error) {
     error = false;
@@ -490,6 +484,36 @@ size_t FakeNSEExchange::try_parse_message(const uint8_t* buf, size_t remaining, 
             }
             const MS_TRADE_INQ_DATA* req = reinterpret_cast<const MS_TRADE_INQ_DATA*>(buf);
             handle_trade_cancellation_request(req, ts);
+            break;
+        }
+
+        case TransactionCodes::SP_BOARD_LOT_IN: {
+            if (header->MessageLength < sizeof(MS_SPD_OE_REQUEST)) {
+                error = true;
+                return 0;
+            }
+            const MS_SPD_OE_REQUEST* req = reinterpret_cast<const MS_SPD_OE_REQUEST*>(buf);
+            handle_spread_order_entry_request(req, ts);
+            break;
+        }
+
+        case TransactionCodes::SP_ORDER_MOD_IN: {
+            if (header->MessageLength < sizeof(MS_SPD_OE_REQUEST)) {
+                error = true;
+                return 0;
+            }
+            const MS_SPD_OE_REQUEST* req = reinterpret_cast<const MS_SPD_OE_REQUEST*>(buf);
+            handle_spread_order_modification_request(req, ts);
+            break;
+        }
+
+        case TransactionCodes::SP_ORDER_CANCEL_IN: {
+            if (header->MessageLength < sizeof(MS_SPD_OE_REQUEST)) {
+                error = true;
+                return 0;
+            }
+            const MS_SPD_OE_REQUEST* req = reinterpret_cast<const MS_SPD_OE_REQUEST*>(buf);
+            handle_spread_order_cancellation_request(req, ts);
             break;
         }
 
@@ -1875,6 +1899,14 @@ void FakeNSEExchange::handle_spread_order_entry_request(const MS_SPD_OE_REQUEST*
         return;
     }
     
+    // Validate spread combination is allowed (check against spread combination master)
+    if (!is_valid_spread_combination(req->Token1, req->MS_SPD_LEG_INFO_leg2.Token2)) {
+        std::cout << "Invalid spread combination: Token1=" << req->Token1 
+                  << ", Token2=" << req->MS_SPD_LEG_INFO_leg2.Token2 << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_ERROR, 16627); // e$invalid_contract_comb
+        return;
+    }
+    
     // Get account number
     std::string account(req->AccountNumber1, 10);
     account.erase(account.find_last_not_of(' ') + 1);
@@ -1913,6 +1945,18 @@ void FakeNSEExchange::handle_spread_order_entry_request(const MS_SPD_OE_REQUEST*
     int outcome = rand() % 100;
     if (outcome < 70) {
         std::cout << "Spread order confirmed normally" << std::endl;
+        
+        // Generate order number and store the order
+        double order_number = generate_order_number(ts);
+        MS_SPD_OE_REQUEST stored_order = *req;
+        stored_order.OrderNumber1 = order_number;
+        stored_order.EntryDateTime1 = static_cast<int32_t>(ts / 1000000);
+        stored_order.LastModified1 = static_cast<int32_t>(ts / 1000000);
+        stored_order.LastActivityReference = generate_activity_reference(ts);
+        
+        // Store the order in active spread orders
+        active_spread_orders_[order_number] = stored_order;
+        
         send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_CONFIRMATION, ErrorCodes::SUCCESS);
     } else if (outcome < 85) {
         std::cout << "Spread order frozen - awaiting exchange approval" << std::endl;
@@ -1950,17 +1994,8 @@ void FakeNSEExchange::send_spread_order_response(const MS_SPD_OE_REQUEST* req, u
         std::cout << "Generated spread order number: " << response.OrderNumber1 << std::endl;
     }
     
-    // Set closeout flag if applicable
-    if (transaction_code == TransactionCodes::SP_ORDER_CONFIRMATION || 
-        transaction_code == TransactionCodes::SP_ORDER_ERROR) {
-        
-        std::string broker_id(req->BrokerId1, 5);
-        broker_id.erase(broker_id.find_last_not_of(' ') + 1);
-        
-        if (is_broker_in_closeout(broker_id)) {
-            response.CloseoutFlag = 'C';
-        }
-    }
+    // Note: MS_SPD_OE_REQUEST does not have CloseoutFlag field
+    // Closeout status is handled through the broker validation logic
     
     // Log the response
     std::cout << "Sending spread order response: TransactionCode=" << transaction_code 
@@ -1971,9 +2006,7 @@ void FakeNSEExchange::send_spread_order_response(const MS_SPD_OE_REQUEST* req, u
         std::cout << ", OrderNumber=" << response.OrderNumber1;
     }
     
-    if (response.CloseoutFlag == 'C') {
-        std::cout << ", CloseoutFlag=C";
-    }
+    // CloseoutFlag not available in MS_SPD_OE_REQUEST structure
     
     std::cout << std::endl;
     
@@ -1981,4 +2014,339 @@ void FakeNSEExchange::send_spread_order_response(const MS_SPD_OE_REQUEST* req, u
     if (message_callback_) {
         message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
     }
+}void FakeNSEExchange::handle_spread_order_modification_request(const MS_SPD_OE_REQUEST* req, uint64_t ts) {
+    std::cout << "Spread order modification request from trader: " << req->Header.TraderId 
+              << " - OrderNumber: " << req->OrderNumber1 << std::endl;
+    
+    // User is unable to log into the trading system
+    if (logged_in_traders_.find(req->Header.TraderId) == logged_in_traders_.end()) {
+        std::cout << "Trader " << req->Header.TraderId << " not logged in" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_REJ_OUT, ErrorCodes::USER_NOT_FOUND);
+        return;
+    }
+    
+    // Markets are closed
+    if (current_market_status_.Normal != 1) {
+        std::cout << "Market is not open for spread order modifications" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_REJ_OUT, ErrorCodes::MARKET_CLOSED);
+        return;
+    }
+    
+    // Find the original order
+    auto order_iter = active_spread_orders_.find(req->OrderNumber1);
+    if (order_iter == active_spread_orders_.end()) {
+        std::cout << "Spread order not found: " << req->OrderNumber1 << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_REJ_OUT, ErrorCodes::ERR_INVALID_ORDER_NUMBER);
+        return;
+    }
+    
+    MS_SPD_OE_REQUEST& original_order = order_iter->second;
+    
+    // Check if this trader owns the order
+    if (original_order.Header.TraderId != req->Header.TraderId) {
+        std::cout << "Trader " << req->Header.TraderId << " does not own order " << req->OrderNumber1 << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_REJ_OUT, ErrorCodes::e$not_your_order);
+        return;
+    }
+    
+    // Get broker ID
+    std::string broker_id(req->BrokerId1, 5);
+    broker_id.erase(broker_id.find_last_not_of(' ') + 1);
+    
+    // Broker is suspended
+    if (is_broker_in_closeout(broker_id)) {
+        std::cout << "Broker " << broker_id << " is suspended" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_REJ_OUT, ErrorCodes::CLOSEOUT_ORDER_REJECT);
+        return;
+    }
+    
+    // Broker is deactivated
+    if (is_broker_deactivated(broker_id)) {
+        std::cout << "Broker " << broker_id << " is deactivated" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_REJ_OUT, ErrorCodes::OE_IS_NOT_ACTIVE);
+        return;
+    }
+    
+    // Check if the order can be modified
+    if (original_order.OrderFlags.Frozen) {
+        std::cout << "Cannot modify frozen spread order" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_REJ_OUT, ErrorCodes::OE_ORD_CANNOT_MODIFY);
+        return;
+    }
+    
+    // Validate the modification
+    if (!is_valid_spread_modification(original_order, req)) {
+        std::cout << "Invalid spread order modification" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_REJ_OUT, ErrorCodes::INVALID_ORDER);
+        return;
+    }
+    
+    // Validate activity reference
+    if (!is_valid_spread_activity_reference(&original_order, req)) {
+        std::cout << "Invalid activity reference for spread order modification" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_REJ_OUT, ErrorCodes::INVALID_ORDER);
+        return;
+    }
+    
+    // Cannot modify spread day order to IOC
+    if (req->OrderFlags.IOC && !original_order.OrderFlags.IOC) {
+        std::cout << "Cannot modify spread day order to IOC" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_REJ_OUT, ErrorCodes::INVALID_ORDER);
+        return;
+    }
+    
+    // Process successful modification
+    std::cout << "Spread order modification accepted" << std::endl;
+    process_successful_spread_modification(original_order, req, ts);
+    send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_MOD_CON_OUT, ErrorCodes::SUCCESS);
+}
+
+void FakeNSEExchange::handle_spread_order_cancellation_request(const MS_SPD_OE_REQUEST* req, uint64_t ts) {
+    std::cout << "Spread order cancellation request from trader: " << req->Header.TraderId 
+              << " - OrderNumber: " << req->OrderNumber1 << std::endl;
+    
+    // User is unable to log into the trading system
+    if (logged_in_traders_.find(req->Header.TraderId) == logged_in_traders_.end()) {
+        std::cout << "Trader " << req->Header.TraderId << " not logged in" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_CXL_REJ_OUT, ErrorCodes::USER_NOT_FOUND);
+        return;
+    }
+    
+    // Find the original order
+    auto order_iter = active_spread_orders_.find(req->OrderNumber1);
+    if (order_iter == active_spread_orders_.end()) {
+        std::cout << "Spread order not found: " << req->OrderNumber1 << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_CXL_REJ_OUT, ErrorCodes::ERR_INVALID_ORDER_NUMBER);
+        return;
+    }
+    
+    MS_SPD_OE_REQUEST& original_order = order_iter->second;
+    
+    // Check if this trader owns the order
+    if (original_order.Header.TraderId != req->Header.TraderId) {
+        std::cout << "Trader " << req->Header.TraderId << " does not own order " << req->OrderNumber1 << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_CXL_REJ_OUT, ErrorCodes::e$not_your_order);
+        return;
+    }
+    
+    // Get broker ID
+    std::string broker_id(req->BrokerId1, 5);
+    broker_id.erase(broker_id.find_last_not_of(' ') + 1);
+    
+    // Broker is suspended
+    if (is_broker_in_closeout(broker_id)) {
+        std::cout << "Broker " << broker_id << " is suspended" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_CXL_REJ_OUT, ErrorCodes::CLOSEOUT_ORDER_REJECT);
+        return;
+    }
+    
+    // Broker is deactivated
+    if (is_broker_deactivated(broker_id)) {
+        std::cout << "Broker " << broker_id << " is deactivated" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_CXL_REJ_OUT, ErrorCodes::OE_IS_NOT_ACTIVE);
+        return;
+    }
+    
+    // Validate activity reference
+    if (!is_valid_spread_activity_reference(&original_order, req)) {
+        std::cout << "Invalid activity reference for spread order cancellation" << std::endl;
+        send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_CXL_REJ_OUT, ErrorCodes::INVALID_ORDER);
+        return;
+    }
+    
+    // Remove the order from active orders
+    active_spread_orders_.erase(order_iter);
+    
+    std::cout << "Spread order cancellation successful" << std::endl;
+    send_spread_order_response(req, ts, TransactionCodes::SP_ORDER_CXL_CONFIRMATION, ErrorCodes::SUCCESS);
+}
+
+// Helper methods for spread order validation and processing
+bool FakeNSEExchange::is_valid_spread_modification(const MS_SPD_OE_REQUEST& original_order, const MS_SPD_OE_REQUEST* modification) const {
+    // Check if trying to change buy/sell direction (not allowed)
+    if (original_order.BuySell1 != modification->BuySell1 || 
+        original_order.MS_SPD_LEG_INFO_leg2.BuySell2 != modification->MS_SPD_LEG_INFO_leg2.BuySell2) {
+        return false;
+    }
+    
+    // Check if trying to change contract details (not allowed)
+    if (memcmp(&original_order.ContractDesc, &modification->ContractDesc, sizeof(CONTRACT_DESC)) != 0 ||
+        memcmp(&original_order.MS_SPD_LEG_INFO_leg2.ContractDesc, &modification->MS_SPD_LEG_INFO_leg2.ContractDesc, sizeof(CONTRACT_DESC)) != 0) {
+        return false;
+    }
+    
+    // Check if trying to change frozen order (not allowed)
+    if (original_order.OrderFlags.Frozen) {
+        return false;
+    }
+    
+    // Quantities must be multiples of regular lot
+    const int32_t REGULAR_LOT = 1;
+    if (modification->Volume1 % REGULAR_LOT != 0 || modification->MS_SPD_LEG_INFO_leg2.Volume2 % REGULAR_LOT != 0) {
+        return false;
+    }
+    
+    // Price difference must be within operating range
+    const int32_t MAX_PRICE_DIFF = 99999999;
+    if (abs(modification->PriceDiff) > MAX_PRICE_DIFF) {
+        return false;
+    }
+    
+    return true;
+}
+
+bool FakeNSEExchange::is_valid_spread_activity_reference(const MS_SPD_OE_REQUEST* order, const MS_SPD_OE_REQUEST* modify_req) const {
+    // For simplicity, accept any activity reference for now
+    // In real implementation, this would validate the LastActivityReference field
+    return modify_req->LastActivityReference != 0;
+}
+
+void FakeNSEExchange::process_successful_spread_modification(MS_SPD_OE_REQUEST& original_order, const MS_SPD_OE_REQUEST* req, uint64_t ts) {
+    // Update modifiable fields
+    original_order.Volume1 = req->Volume1;
+    original_order.MS_SPD_LEG_INFO_leg2.Volume2 = req->MS_SPD_LEG_INFO_leg2.Volume2;
+    original_order.PriceDiff = req->PriceDiff;
+    
+    // Update remaining volumes
+    original_order.TotalVolRemaining1 = req->Volume1;
+    original_order.MS_SPD_LEG_INFO_leg2.TotalVolRemaining2 = req->MS_SPD_LEG_INFO_leg2.Volume2;
+    
+    // Update modification timestamps
+    original_order.LastModified1 = static_cast<int32_t>(ts / 1000000);
+    original_order.LastActivityReference = generate_activity_reference(ts);
+    
+    // Mark as modified
+    original_order.OrderFlags.Modified = 1;
+    
+    std::cout << "Spread order successfully modified - New Volume1: " << original_order.Volume1 
+              << ", New Volume2: " << original_order.MS_SPD_LEG_INFO_leg2.Volume2
+              << ", New PriceDiff: " << original_order.PriceDiff << std::endl;
+}// Spread Combination Master Update Broadcast Implementation
+
+void FakeNSEExchange::broadcast_spread_combination_update(const MS_SPD_UPDATE_INFO& update_info, uint64_t ts) {
+    std::cout << "Broadcasting spread combination master update for tokens: " 
+              << update_info.Token1 << " and " << update_info.Token2 << std::endl;
+    
+    // Create broadcast message with BCAST_HEADER
+    struct BCAST_SPD_UPDATE {
+        BCAST_HEADER Header;
+        MS_SPD_UPDATE_INFO UpdateInfo;
+    };
+    
+    BCAST_SPD_UPDATE broadcast;
+    memset(&broadcast, 0, sizeof(broadcast));
+    
+    // Set up BCAST_HEADER
+    broadcast.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    broadcast.Header.TransactionCode = TransactionCodes::BCAST_SPD_MSTR_CHG;
+    broadcast.Header.ErrorCode = ErrorCodes::SUCCESS;
+    broadcast.Header.MessageLength = sizeof(BCAST_SPD_UPDATE);
+    
+    // Copy update info
+    broadcast.UpdateInfo = update_info;
+    
+    std::cout << "Sending spread combination update - Token1: " << update_info.Token1 
+              << ", Token2: " << update_info.Token2 
+              << ", ReferencePrice: " << update_info.ReferencePrice
+              << ", Eligibility: " << (int)update_info.SPDEligibility.Eligibility
+              << ", DeleteFlag: " << update_info.DeleteFlag << std::endl;
+    
+    // Send broadcast via callback
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&broadcast), sizeof(broadcast));
+    }
+}
+
+void FakeNSEExchange::broadcast_periodic_spread_combination_update(const MS_SPD_UPDATE_INFO& update_info, uint64_t ts) {
+    std::cout << "Broadcasting periodic spread combination master update for tokens: " 
+              << update_info.Token1 << " and " << update_info.Token2 << std::endl;
+    
+    // Create broadcast message with BCAST_HEADER
+    struct BCAST_SPD_UPDATE {
+        BCAST_HEADER Header;
+        MS_SPD_UPDATE_INFO UpdateInfo;
+    };
+    
+    BCAST_SPD_UPDATE broadcast;
+    memset(&broadcast, 0, sizeof(broadcast));
+    
+    // Set up BCAST_HEADER
+    broadcast.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    broadcast.Header.TransactionCode = TransactionCodes::BCAST_SPD_MSTR_CHG_PERIODIC;
+    broadcast.Header.ErrorCode = ErrorCodes::SUCCESS;
+    broadcast.Header.MessageLength = sizeof(BCAST_SPD_UPDATE);
+    
+    // Copy update info
+    broadcast.UpdateInfo = update_info;
+    
+    std::cout << "Sending periodic spread combination update - Token1: " << update_info.Token1 
+              << ", Token2: " << update_info.Token2 
+              << ", DayLowPriceDiffRange: " << update_info.DayLowPriceDiffRange
+              << ", DayHighPriceDiffRange: " << update_info.DayHighPriceDiffRange << std::endl;
+    
+    // Send broadcast via callback
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&broadcast), sizeof(broadcast));
+    }
+}
+
+// Helper methods for spread combination management
+void FakeNSEExchange::add_spread_combination(int32_t token1, int32_t token2, const MS_SPD_UPDATE_INFO& combination_info) {
+    std::pair<int32_t, int32_t> key = std::make_pair(token1, token2);
+    spread_combinations_[key] = combination_info;
+    
+    std::cout << "Added spread combination: Token1=" << token1 << ", Token2=" << token2 
+              << ", ReferencePrice=" << combination_info.ReferencePrice << std::endl;
+    
+    // Broadcast the new combination
+    auto current_time = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    broadcast_spread_combination_update(combination_info, current_time);
+}
+
+void FakeNSEExchange::update_spread_combination(int32_t token1, int32_t token2, const MS_SPD_UPDATE_INFO& updated_info, uint64_t ts) {
+    std::pair<int32_t, int32_t> key = std::make_pair(token1, token2);
+    
+    auto it = spread_combinations_.find(key);
+    if (it != spread_combinations_.end()) {
+        // Update existing combination
+        MS_SPD_UPDATE_INFO& existing = it->second;
+        
+        // Update modifiable fields
+        existing.ReferencePrice = updated_info.ReferencePrice;
+        existing.DayLowPriceDiffRange = updated_info.DayLowPriceDiffRange;
+        existing.DayHighPriceDiffRange = updated_info.DayHighPriceDiffRange;
+        existing.OpLowPriceDiffRange = updated_info.OpLowPriceDiffRange;
+        existing.OpHighPriceDiffRange = updated_info.OpHighPriceDiffRange;
+        existing.SPDEligibility = updated_info.SPDEligibility;
+        existing.DeleteFlag = updated_info.DeleteFlag;
+        
+        std::cout << "Updated spread combination: Token1=" << token1 << ", Token2=" << token2 
+                  << ", New ReferencePrice=" << updated_info.ReferencePrice 
+                  << ", New Eligibility=" << (int)updated_info.SPDEligibility.Eligibility << std::endl;
+        
+        // Broadcast the update
+        broadcast_spread_combination_update(existing, ts);
+    } else {
+        std::cout << "Spread combination not found for update: Token1=" << token1 << ", Token2=" << token2 << std::endl;
+        // Add as new combination
+        add_spread_combination(token1, token2, updated_info);
+    }
+}
+
+bool FakeNSEExchange::is_valid_spread_combination(int32_t token1, int32_t token2) const {
+    std::pair<int32_t, int32_t> key = std::make_pair(token1, token2);
+    auto it = spread_combinations_.find(key);
+    
+    if (it == spread_combinations_.end()) {
+        return false;
+    }
+    
+    const MS_SPD_UPDATE_INFO& combination = it->second;
+    
+    // Check if combination is eligible and not deleted
+    bool is_eligible = (combination.SPDEligibility.Eligibility == 1);
+    bool is_not_deleted = (combination.DeleteFlag != 'Y');
+    
+    return is_eligible && is_not_deleted;
 }

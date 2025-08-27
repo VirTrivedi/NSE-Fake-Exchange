@@ -2170,8 +2170,17 @@ namespace TransactionCodes {
     const int16_t TRADE_CANCEL_IN = 5440;
     const int16_t TRADE_CANCEL_OUT = 5441;
     const int16_t SP_BOARD_LOT_IN = 2100;
+    const int16_t SP_ORDER_MOD_IN = 2118;
+    const int16_t SP_ORDER_CANCEL_IN = 2106;
     const int16_t SP_ORDER_CONFIRMATION = 2124;
+    const int16_t SP_ORDER_MOD_CON_OUT = 2136;
+    const int16_t SP_ORDER_CXL_CONFIRMATION = 2130;
+    const int16_t SP_ORDER_MOD_REJ_OUT = 2133;
+    const int16_t SP_ORDER_CXL_REJ_OUT = 2127;
     const int16_t SP_ORDER_ERROR = 2154;
+    const int16_t BATCH_SPREAD_CXL_OUT = 9004;
+    const int16_t BCAST_SPD_MSTR_CHG = 7309;
+    const int16_t BCAST_SPD_MSTR_CHG_PERIODIC = 7341;
 }
 
 // Error Codes

@@ -43,9 +43,14 @@ public:
     void handle_order_cancellation_request(const MS_OE_REQUEST* req, uint64_t ts);
     void handle_kill_switch_request(const MS_OE_REQUEST* req, uint64_t ts);
     void handle_spread_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
+    void handle_spread_order_modification_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
+    void handle_spread_order_cancellation_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
     void handle_trade_modification_request(const MS_TRADE_INQ_DATA* req, uint64_t ts);
     void handle_trade_cancellation_request(const MS_TRADE_INQ_DATA* req, uint64_t ts);
-    void handle_spread_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
+    
+    // Spread combination master broadcasts
+    void broadcast_spread_combination_update(const MS_SPD_UPDATE_INFO& update_info, uint64_t ts);
+    void broadcast_periodic_spread_combination_update(const MS_SPD_UPDATE_INFO& update_info, uint64_t ts);
     
     
 private:
@@ -59,6 +64,8 @@ private:
     std::map<std::string, char> broker_types_;
 
     std::map<double, MS_OE_REQUEST> active_orders_;
+    std::map<double, MS_SPD_OE_REQUEST> active_spread_orders_;
+    std::map<std::pair<int32_t, int32_t>, MS_SPD_UPDATE_INFO> spread_combinations_;
 
     std::map<int32_t, MS_TRADE_INQ_DATA> executed_trades_;
     std::set<std::string> trade_modification_requests_;
@@ -84,7 +91,7 @@ private:
     void send_kill_switch_response(const MS_OE_REQUEST* req, uint64_t ts, int16_t error_code, int32_t cancelled_count = 0);
     void send_trade_modification_response(const MS_TRADE_INQ_DATA* req, uint64_t ts, int16_t transaction_code, int16_t error_code);
     void send_trade_cancellation_response(const MS_TRADE_INQ_DATA* req, uint64_t ts, int16_t transaction_code, int16_t error_code);
-    void send_spread_order_response(const MS_SPD_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code, int16_t reason_code) {
+    void send_spread_order_response(const MS_SPD_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code, int16_t reason_code = ReasonCodes::NORMAL_CONFIRMATION);
 
     // Helper methods
     bool validate_trader_market_status(const MS_UPDATE_LOCAL_DATABASE* req);
@@ -107,4 +114,10 @@ private:
     bool is_duplicate_trade_request(int32_t fill_number, int32_t trader_id, const std::string& operation);
     void mark_trade_request(int32_t fill_number, int32_t trader_id, const std::string& operation);
     bool is_trade_owner(const MS_TRADE_INQ_DATA& trade, int32_t trader_id, const std::string& broker_id);
+    bool is_valid_spread_modification(const MS_SPD_OE_REQUEST& original_order, const MS_SPD_OE_REQUEST* modification) const;
+    bool is_valid_spread_activity_reference(const MS_SPD_OE_REQUEST* order, const MS_SPD_OE_REQUEST* modify_req) const;
+    void process_successful_spread_modification(MS_SPD_OE_REQUEST& original_order, const MS_SPD_OE_REQUEST* req, uint64_t ts);
+    void add_spread_combination(int32_t token1, int32_t token2, const MS_SPD_UPDATE_INFO& combination_info);
+    void update_spread_combination(int32_t token1, int32_t token2, const MS_SPD_UPDATE_INFO& updated_info, uint64_t ts);
+    bool is_valid_spread_combination(int32_t token1, int32_t token2) const;
 };

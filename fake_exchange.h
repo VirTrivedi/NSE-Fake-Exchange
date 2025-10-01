@@ -45,14 +45,48 @@ public:
     void handle_spread_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
     void handle_spread_order_modification_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
     void handle_spread_order_cancellation_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
+    void handle_2l_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
+    void handle_3l_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts);
     void handle_trade_modification_request(const MS_TRADE_INQ_DATA* req, uint64_t ts);
     void handle_trade_cancellation_request(const MS_TRADE_INQ_DATA* req, uint64_t ts);
     
     // Spread combination master broadcasts
     void broadcast_spread_combination_update(const MS_SPD_UPDATE_INFO& update_info, uint64_t ts);
     void broadcast_periodic_spread_combination_update(const MS_SPD_UPDATE_INFO& update_info, uint64_t ts);
-    
-    
+
+    // Unsolicited message broadcasts (Chapter 7)
+    void send_stop_loss_notification(const MS_OE_REQUEST& order, uint64_t ts);
+    void send_mit_notification(const MS_OE_REQUEST& order, uint64_t ts);
+    void send_freeze_approval(const MS_OE_REQUEST& order, uint64_t ts);
+    void send_trade_confirmation(const MS_TRADE_CONFIRM& trade, uint64_t ts);
+    void send_trade_modification_confirmation(const MS_TRADE_CONFIRM& trade, uint64_t ts);
+    void send_trade_modification_rejection(const MS_TRADE_CONFIRM& trade, int16_t error_code, uint64_t ts);
+    void send_trade_cancellation_confirmation(const MS_TRADE_CONFIRM& trade, uint64_t ts);
+    void send_trade_cancellation_rejection(const MS_TRADE_CONFIRM& trade, int16_t error_code, uint64_t ts);
+    void send_user_order_limit_update(const MS_ORDER_VAL_LIMIT_DATA& limit_data, uint64_t ts);
+    void send_dealer_limit_update(const DEALER_ORD_LMT& limit_data, uint64_t ts);
+    void send_spread_order_limit_update(const SPD_ORD_LMT& limit_data, uint64_t ts);
+    void send_control_message(int32_t trader_id, const char* action_code, const std::string& message, uint64_t ts);
+    void send_broadcast_message(const char* broker_id, const char* action_code, const std::string& message, uint64_t ts);
+    void send_batch_order_cancel(const MS_OE_REQUEST& order, uint64_t ts);
+    void send_batch_spread_cancel(const MS_SPD_OE_REQUEST& order, uint64_t ts);
+
+    // Bhavcopy broadcasts (Chapter 8)
+    void send_bhavcopy_start_notification(uint64_t ts, bool is_spread = false);
+    void send_bhavcopy_header(char session_type, int32_t report_date, uint64_t ts, bool is_spread = false);
+    void send_bhavcopy_data(char session_type, const std::vector<MKT_STATS_DATA>& stats, uint64_t ts, bool enhanced = false);
+    void send_bhavcopy_trailer(char session_type, int32_t packet_count, uint64_t ts, bool is_spread = false);
+    void send_spread_bhavcopy_data(char session_type, const std::vector<SPD_STATS_DATA>& stats, uint64_t ts);
+    void send_spread_bhavcopy_success(uint64_t ts);
+    void send_market_index_report(const std::string& index_name, const MKT_INDEX& index_data, uint64_t ts);
+    void send_industry_index_report(const std::vector<INDUSTRY_INDEX>& industry_data, uint64_t ts);
+    void send_sector_index_report(const std::string& industry_name, const std::vector<INDEX_DATA>& sector_data, uint64_t ts);
+
+    // Helper for generating complete bhavcopy
+    void generate_and_broadcast_bhavcopy(char session_type, uint64_t ts);
+    void generate_and_broadcast_spread_bhavcopy(char session_type, uint64_t ts);
+
+
 private:
     std::set<int32_t> logged_in_traders_;
     std::map<int32_t, int32_t> trader_last_logoff_time_;
@@ -76,6 +110,13 @@ private:
     ST_PL_MARKET_STATUS current_pl_market_status_;
     bool markets_are_opening_;
 
+    // Bhavcopy data storage
+    std::map<std::string, MKT_STATS_DATA> market_statistics_;
+    std::map<std::string, SPD_STATS_DATA> spread_statistics_;
+    std::map<std::string, MKT_INDEX> market_indices_;
+    std::map<std::string, std::vector<INDUSTRY_INDEX>> industry_indices_;
+    std::map<std::string, std::vector<INDEX_DATA>> sector_indices_;
+
     size_t try_parse_message(const uint8_t* buf, size_t remaining, uint64_t ts, bool& error);
 
     void send_signon_response(const MS_SIGNON_REQUEST_IN* req, uint64_t ts, int16_t error_code);
@@ -92,6 +133,8 @@ private:
     void send_trade_modification_response(const MS_TRADE_INQ_DATA* req, uint64_t ts, int16_t transaction_code, int16_t error_code);
     void send_trade_cancellation_response(const MS_TRADE_INQ_DATA* req, uint64_t ts, int16_t transaction_code, int16_t error_code);
     void send_spread_order_response(const MS_SPD_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code, int16_t reason_code = ReasonCodes::NORMAL_CONFIRMATION);
+    void send_2l_order_response(const MS_SPD_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code, int16_t reason_code = ReasonCodes::NORMAL_CONFIRMATION);
+    void send_3l_order_response(const MS_SPD_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code, int16_t reason_code = ReasonCodes::NORMAL_CONFIRMATION);
 
     // Helper methods
     bool validate_trader_market_status(const MS_UPDATE_LOCAL_DATABASE* req);
@@ -120,4 +163,7 @@ private:
     void add_spread_combination(int32_t token1, int32_t token2, const MS_SPD_UPDATE_INFO& combination_info);
     void update_spread_combination(int32_t token1, int32_t token2, const MS_SPD_UPDATE_INFO& updated_info, uint64_t ts);
     bool is_valid_spread_combination(int32_t token1, int32_t token2) const;
+    bool are_quantities_matching(const MS_SPD_OE_REQUEST* req, bool is_3l) const;
+    bool are_tokens_same_stream(int32_t token1, int32_t token2, int32_t token3, bool is_3l) const;
+    bool is_valid_2l_3l_order(const MS_SPD_OE_REQUEST* req, bool is_3l) const;
 };

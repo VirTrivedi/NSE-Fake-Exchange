@@ -29,14 +29,14 @@ struct INNER_MESSAGE_HEADER {
 
 
 struct BCAST_HEADER {
-    char Reserved[2];
+    char Reserved1[2];
     int32_t LogTime;
     char AlphaChar[2];
     int16_t TransactionCode;
     int16_t ErrorCode;
     int32_t BCSeqNo;
-    char Reserved[1];
-    char Reserved[3];
+    char Reserved2[1];
+    char Reserved3[3];
     char TimeStamp2[8];
     char Filler2[8];
     int16_t MessageLength;
@@ -73,20 +73,20 @@ struct ST_BROKER_ELIGIBILITY_PER_MKT_BIG_ENDIAN {
 struct MS_SIGNON_REQUEST_IN {
     MESSAGE_HEADER Header;
     int32_t UserID;
-    char Reserved[8];
+    char Reserved1[8];
     char Password[8];
-    char Reserved[8];
+    char Reserved2[8];
     char NewPassword[8];
     char TraderName[26];
     int32_t LastPasswordChangeDate;
     char BrokerID[5];
-    char Reserved[1];
+    char Reserved3[1];
     int16_t BranchID;
     int32_t VersionNumber;
     int32_t Batch2StartTime;
     char HostSwitchContext[1];
     char Colour[50];
-    char Reserved[1];
+    char Reserved4[1];
     int16_t UserType;
     double SequenceNumber;
     char WsClassName[14];
@@ -96,41 +96,41 @@ struct MS_SIGNON_REQUEST_IN {
     int16_t MemberType;
     char ClearingStatus[1];
     char BrokerName[25];
-    char Reserved[16];
-    char Reserved[16];
-    char Reserved[16];
+    char Reserved5[16];
+    char Reserved6[16];
+    char Reserved7[16];
 };
 
 
 struct MS_SIGNON_REQUEST_OUT {
     MESSAGE_HEADER Header;
     int32_t UserID;
-    char Reserved[8];
+    char Reserved1[8];
     char Password[8];
-    char Reserved[8];
+    char Reserved2[8];
     char NewPassword[8];
     char TraderName[26];
     int32_t LastPasswordChangeDate;
     char BrokerID[5];
-    char Reserved[1];
+    char Reserved3[1];
     int16_t BranchID;
     int32_t VersionNumber;
     int32_t EndTime;
-    char Reserved[1];
+    char Reserved4[1];
     char Colour[50];
-    char Reserved[1];
+    char Reserved5[1];
     int16_t UserType;
     double SequenceNumber;
-    char Reserved[14];
+    char Reserved6[14];
     char BrokerStatus[1];
     char ShowIndex[1];
     ST_BROKER_ELIGIBILITY_PER_MKT_SMALL_ENDIAN BrokerEligibilityPerMarket;
     int16_t MemberType;
     char ClearingStatus[1];
     char BrokerName[25];
-    char Reserved[16];
-    char Reserved[16];
-    char Reserved[16];
+    char Reserved7[16];
+    char Reserved8[16];
+    char Reserved9[16];
 };
 
 
@@ -197,7 +197,7 @@ struct MS_SYSTEM_INFO_DATA {
     int16_t WarningPercent;
     int16_t VolumeFreezePercent;
     int16_t SnapQuoteTime;
-    char Reserved[2];
+    char Reserved1[2];
     int32_t BoardLotQuantity;
     int32_t TickSize;
     int16_t MaximumGtcDays;
@@ -214,7 +214,7 @@ struct MS_UPDATE_LOCAL_DATABASE {
     int32_t LastUpdateInstrumentTime;
     int32_t LastUpdateIndexTime;
     char RequestForOpenOrders;
-    char Reserved;
+    char Reserved1;
     ST_MARKET_STATUS MarketStatus;
     ST_EX_MARKET_STATUS ExMarketStatus;
     ST_PL_MARKET_STATUS PlMarketStatus;
@@ -223,7 +223,7 @@ struct MS_UPDATE_LOCAL_DATABASE {
 
 struct UPDATE_LDB_HEADER {
     MESSAGE_HEADER Header;
-    char Reserved[2];
+    char Reserved1[2];
 };
 
 
@@ -264,7 +264,7 @@ struct MS_DOWNLOAD_INDEX_MAP {
 
 struct UPDATE_LOCAL_DB_TRAILER {
     MESSAGE_HEADER Header;
-    char Reserved[2];
+    char Reserved1[2];
 };
 
 
@@ -317,7 +317,7 @@ struct MS_SIGNOFF {
 struct SIGNOFF_OUT {
     MESSAGE_HEADER Header;
     int32_t UserId;
-    char Reserved[145];
+    char Reserved1[145];
 };
 
 
@@ -340,7 +340,8 @@ struct ST_ORDER_FLAGS_SMALL_ENDIAN {
     uint8_t SL : 1;
     uint8_t Market : 1;
     uint8_t ATO : 1;
-    uint8_t Reserved : 3;
+    uint8_t PreOpen : 1;
+    uint8_t Reserved : 2;
     uint8_t Frozen : 1;
     uint8_t Modified : 1;
     uint8_t Traded : 1;
@@ -390,7 +391,7 @@ struct ADDITIONAL_ORDER_FLAGS_BIG_ENDIAN {
 struct MS_OE_REQUEST {
     MESSAGE_HEADER Header;
     char ParticipantType;
-    char Reserved;
+    char Reserved1;
     int16_t CompetitorPeriod;
     int16_t SolicitorPeriod;
     char ModifiedCancelledBy;
@@ -454,7 +455,7 @@ struct PRICE_MOD {
     int32_t LastModified;
     char Reference[4];
     int64_t LastActivityReference;
-    char Reserved[24];
+    char Reserved1[24];
 };
 
 
@@ -467,7 +468,7 @@ struct MS_TRADE_INQ_DATA {
     int32_t FillPrice;
     char MktType;
     char BuyOpenClose;
-    int32_t Reserved;
+    int32_t Reserved1;
     char BuyBrokerId[5];
     char SellBrokerId[5];
     int32_t TraderId;
@@ -475,12 +476,12 @@ struct MS_TRADE_INQ_DATA {
     char SellOpenClose;
     char BuyAccountNumber[10];
     char SellAccountNumber[10];
-    char Reserved[24];
+    char Reserved2[24];
     char ReservedFiller[2];
-    char Reserved[2];
+    char Reserved3[2];
     char BuyPAN[10];
     char SellPAN[10];
-    char Reserved[60];
+    char Reserved4[60];
 };
 
 
@@ -502,7 +503,7 @@ struct MS_SPD_LEG_INFO {
     ST_ORDER_FLAGS_SMALL_ENDIAN OrderFlags;
     char OpenClose2[1];
     ADDITIONAL_ORDER_FLAGS_SMALL_ENDIAN AdditionalOrderFlags;
-    char Reserved[1];
+    char Reserved1[1];
     char FillerY[1];
 };
 
@@ -550,7 +551,7 @@ struct MS_SPD_OE_REQUEST {
     int16_t ProClient1;
     int16_t SettlementPeriod1;
     ADDITIONAL_ORDER_FLAGS_SMALL_ENDIAN AdditionalOrderFlags;
-    char Reserved;
+    char Reserved1;
     char Filler17;
     char Filler18;
     double NnField;
@@ -595,9 +596,9 @@ struct MS_SPD_UPDATE_INFO {
     int32_t OpLowPriceDiffRange;
     int32_t OpHighPriceDiffRange;
     ST_SPD_ELIGIBILITY SPDEligibility;
-    char Reserved;
+    char Reserved1;
     char DeleteFlag;
-    char Reserved;
+    char Reserved2;
 };
 
 
@@ -605,7 +606,7 @@ struct MS_TRADE_CONFIRM {
     MESSAGE_HEADER Header;
     double ResponseOrderNumber;
     char BrokerId[5];
-    char Reserved;
+    char Reserved1;
     int32_t TraderNumber;
     char AccountNumber[10];
     int16_t BuySellIndicator;
@@ -629,7 +630,7 @@ struct MS_TRADE_CONFIRM {
     char OpenClose;
     char OldOpenClose;
     char BookType;
-    int32_t Reserved1;
+    int32_t Reserved_int32;
     char OldAccountNumber[10];
     char Participant[12];
     char OldParticipant[12];
@@ -690,8 +691,8 @@ struct SPD_ORD_LMT {
 struct MS_TRADER_INT_MSG {
     MESSAGE_HEADER Header;
     int32_t TraderId;
-    char Reserved[3];
-    char Reserved[1];
+    char ActionCode[3];
+    char Reserved1[1];
     int16_t BroadCastMessageLength;
     char BroadCastMessage[239];
 };
@@ -723,7 +724,7 @@ struct MS_BCAST_MESSAGE {
     char BrokerNumber[5];
     char ActionCode[3];
     ST_BCAST_DESTINATION_SMALL_ENDIAN BCASTDestination;
-    char Reserved[26];
+    char Reserved1[26];
     int16_t BroadcastMessageLength;
     char BroadcastMessage[239];
 };
@@ -733,7 +734,7 @@ struct CTRL_MSG_TO_TRADER {
     MESSAGE_HEADER Header;
     int32_t TraderId;
     char ActionCode[3];
-    char Reserved[1];
+    char Reserved1[1];
     int16_t BroadCastMessageLength;
     char BroadCastMessage[239];
 };
@@ -770,7 +771,7 @@ struct MKT_STATS_DATA {
 struct MS_RP_MARKET_STATS {
     MESSAGE_HEADER Header;
     char MessageType;
-    char Reserved;
+    char Reserved1;
     int16_t NumberOfRecords;
     MKT_STATS_DATA MarketStatsData;
 };
@@ -806,7 +807,7 @@ struct INDUSTRY_INDEX {
 struct IND_IDX_RPT_DATA {
     MESSAGE_HEADER Header;
     char MessageType;
-    char Reserved;
+    char Reserved1;
     int16_t NumberOfIndustryRecords;
     INDUSTRY_INDEX IndustryIndex;
 };
@@ -831,7 +832,32 @@ struct MS_RP_TRAILER_RPRT_MARKET_STATS_OUT_RPT {
     MESSAGE_HEADER Header;
     char MessageType;
     int32_t NumberOfPackets;
-    char Reserved;
+    char Reserved1;
+};
+
+
+struct ENHNCD_MKT_STATS_DATA {
+    CONTRACT_DESC ContractDesc;
+    int16_t MarketType;
+    int32_t OpenPrice;
+    int32_t HighPrice;
+    int32_t LowPrice;
+    int32_t ClosingPrice;
+    uint32_t TotalQuantityTraded;
+    double TotalValueTraded;
+    int32_t PreviousClosePrice;
+    int64_t OpenInterest;
+    int64_t ChgOpenInterest;
+    char Indicator[4];
+};
+
+
+struct ENHNCD_MS_RP_MARKET_STATS {
+    MESSAGE_HEADER Header;
+    char MessageType;
+    char Reserved1;
+    int16_t NumberOfRecords;
+    ENHNCD_MKT_STATS_DATA MarketStatsData[4];
 };
 
 
@@ -873,7 +899,7 @@ struct SPD_STATS_DATA {
 struct RP_SPD_MKT_STATS {
     MESSAGE_HEADER Header;
     char MessageType;
-    char Reserved;
+    char Reserved1;
     int16_t NoOfRecords;
     SPD_STATS_DATA SPDStatsData;
 };
@@ -883,7 +909,7 @@ struct MS_RP_TRAILER_SPD_BC_JRNL_VCT_MSG {
     MESSAGE_HEADER Header;
     char MessageType;
     int32_t NumberOfPackets;
-    char Reserved;
+    char Reserved1;
 };
 
 
@@ -974,7 +1000,7 @@ struct MS_SECURITY_UPDATE_INFO {
     int32_t BoardLotQuantity;
     int32_t TickSize;
     char Name[25];
-    char Reserved[1];
+    char Reserved1[1];
     int32_t ListingDate;
     int32_t ExpulsionDate;
     int32_t ReAdmissionDate;
@@ -1305,7 +1331,7 @@ struct MS_INDICES {
     int32_t NoOfDownmoves;
     double MarketCapitalisation;
     char NetChangeIndicator;
-    char Reserved;
+    char Reserved1;
 };
 
 
@@ -1455,15 +1481,15 @@ struct ENHNCD_OPEN_INTEREST {
 
 
 struct ENHNCD_CM_ASSET_OI {
-    char Reserved[2];
-    char Reserved[2];
+    char Reserved1[2];
+    char Reserved2[2];
     int32_t LogTime;
     char MarketType[2];
     int16_t TransactionCode;
     int16_t NoOfRecords;
-    char Reserved[8];
+    char Reserved3[8];
     int64_t TimeStamp;
-    char Reserved[8];
+    char Reserved4[8];
     int16_t MessageLength;
     ENHNCD_OPEN_INTEREST EnhncdOpenInterest;
 };
@@ -1538,7 +1564,7 @@ struct MS_BOX_SIGN_ON_REQUEST_IN {
     MESSAGE_HEADER Header;
     int16_t BoxId;
     char BrokerId[5];
-    char Reserved[5];
+    char Reserved1[5];
     char SessionKey[8];
 };
 
@@ -1546,7 +1572,7 @@ struct MS_BOX_SIGN_ON_REQUEST_IN {
 struct MS_BOX_SIGN_ON_REQUEST_OUT {
     MESSAGE_HEADER Header;
     int16_t BoxId;
-    char Reserved[10];
+    char Reserved1[10];
 };
 
 
@@ -1565,42 +1591,42 @@ struct MS_BCAST_CONT_MESSAGE {
     MESSAGE_HEADER Header;
     int16_t StreamNumber;
     int16_t Status;
-    char Reserved[200];
+    char Reserved1[200];
 };
 
 
 struct BRANCH_LIMITS {
     double BranchBuyValueLimit;
     double BranchSellValueLimit;
-    char Reserved[16];
+    char Reserved1[16];
 };
 
 
 struct BRANCH_ORD_VAL_LIMIT_UPDATE_REQ {
     MESSAGE_HEADER Header;
     char BrokerId[5];
-    char Reserved[25];
+    char Reserved1[25];
     int16_t BranchId;
     BRANCH_LIMITS BranchLimits;
 };
 
 
 struct USER_LIMITS {
-    char Reserved[32];
+    char Reserved1[32];
     double UserOrderBuyValueLimit;
     double UserOrderSellValueLimit;
-    char Reserved[16];
+    char Reserved2[16];
 };
 
 
 struct USER_ORD_VAL_LIMIT_UPDATE_REQ {
     MESSAGE_HEADER Header;
     char BrokerId[5];
-    char Reserved;
+    char Reserved1;
     int16_t BranchId;
-    char Reserved[26];
+    char Reserved2[26];
     int32_t UserId;
-    char Reserved[2];
+    char Reserved3[2];
     USER_LIMITS UserLimits;
 };
 
@@ -1608,7 +1634,7 @@ struct USER_ORD_VAL_LIMIT_UPDATE_REQ {
 struct NORMAL_ORD_LIMIT_UPDATE_REQ {
     MESSAGE_HEADER Header;
     char BrokerId[5];
-    char Reserved[1];
+    char Reserved1[1];
     int32_t UserId;
     double OrderQtyLimit;
     double OrderValLimit;
@@ -1618,7 +1644,7 @@ struct NORMAL_ORD_LIMIT_UPDATE_REQ {
 struct RESET_USER_PASSWORD_IN_FO {
     MESSAGE_HEADER Header;
     int32_t Userid;
-    char Reserved[14];
+    char Reserved1[14];
 };
 
 
@@ -1626,7 +1652,7 @@ struct COL_USER_STATUS_CHANGE_REQ {
     MESSAGE_HEADER Header;
     int32_t Userid;
     char ColUserBit;
-    char Reserved[7];
+    char Reserved1[7];
 };
 
 
@@ -1634,7 +1660,7 @@ struct COL_USER_STATUS_CHANGE_RESP {
     MESSAGE_HEADER Header;
     int32_t Userid;
     char ColUserBit;
-    char Reserved;
+    char Reserved1;
 };
 
 
@@ -1642,7 +1668,7 @@ struct USER_TRD_MOD_CXL_STATUS_CHG_REQ {
     MESSAGE_HEADER Header;
     int32_t Userid;
     char TrdModCxlBit;
-    char Reserved[7];
+    char Reserved1[7];
 };
 
 
@@ -1650,28 +1676,28 @@ struct USER_TRD_MOD_CXL_STATUS_CHG_RESP {
     MESSAGE_HEADER Header;
     int32_t Userid;
     char TrdModCxlBit;
-    char Reserved;
+    char Reserved1;
 };
 
 
 struct USER_ADDR_UNLOCK_REQ_FO {
     MESSAGE_HEADER Header;
     int32_t Userid;
-    char Reserved[70];
+    char Reserved1[70];
 };
 
 
 struct USER_ADDR_UNLOCK_CONFIRM_FO {
     MESSAGE_HEADER Header;
     int32_t Userid;
-    char Reserved[36];
+    char Reserved1[36];
 };
 
 
 struct USER_ADDR_UNLOCK_APPROVE_FO {
     MESSAGE_HEADER Header;
     int32_t UserId;
-    char Reserved[36];
+    char Reserved1[36];
 };
 
 
@@ -1719,17 +1745,17 @@ struct MS_ACK_RESPONSE {
 
 struct CONTRACT_FILE_HEADER {
     char NEATFO[6];
-    char Reserved;
+    char Reserved1;
     char VersionNumber[5];
-    char Reserved;
+    char Reserved2;
 };
 
 
 struct ST_SEC_ELIGIBILITY_PER_MARKET_6_BYTES {
     int16_t SecurityStatus;
-    char Reserved;
+    char Reserved1;
     char Eligibility;
-    char Reserved[2];
+    char Reserved2[2];
 };
 
 
@@ -1851,120 +1877,120 @@ struct STOCK_STRUCTURE {
 
 struct PARTICIPANT_FILE_HEADER {
     char NSEFO[6];
-    char Reserved;
+    char Reserved1;
     char VersionNumber[5];
-    char Reserved[2];
+    char Reserved2[2];
 };
 
 
 struct PARTICIPANT_STRUCTURE {
     char ParticipantId[12];
-    char Reserved;
+    char Reserved1;
     char ParticipantName[25];
-    char Reserved;
+    char Reserved2;
     char ParticipantStatus;
-    char Reserved;
+    char Reserved3;
     char DeleteFlag;
-    char Reserved;
+    char Reserved4;
     int32_t LastUpdateTime;
 };
 
 
 struct SECURITY_FILE_HEADER {
     char NEATCM[6];
-    char Reserved;
+    char Reserved1;
     char VersionNumber[7];
-    char Reserved;
+    char Reserved2;
     int32_t CreationTime;
 };
 
 
 struct ST_SEC_ELIGIBILITY_PER_MARKET_5_BYTES {
     int16_t SecurityStatus;
-    char Reserved;
+    char Reserved1;
     char Eligibility;
-    char Reserved;
+    char Reserved2;
 };
 
 
 struct SECURITY_STRUCTURE {
     int32_t Token;
-    char Reserved;
+    char Reserved1;
     char Symbol[10];
-    char Reserved;
+    char Reserved2;
     char Series[2];
-    char Reserved;
+    char Reserved3;
     int16_t InstrumentType;
-    char Reserved;
+    char Reserved4;
     double IssuedCapital;
-    char Reserved;
+    char Reserved5;
     int16_t PermittedToTrade;
-    char Reserved;
+    char Reserved6;
     char CreditRating[17];
-    char Reserved;
+    char Reserved7;
     ST_SEC_ELIGIBILITY_PER_MARKET_5_BYTES EligibilityPerMarket;
     int32_t BoardLotQty;
-    char Reserved;
+    char Reserved8;
     int32_t TickSize;
-    char Reserved;
+    char Reserved9;
     char Name[25];
-    char Reserved;
+    char Reserved10;
     int16_t IssueRate;
-    char Reserved;
+    char Reserved11;
     int32_t IssueStartDate;
-    char Reserved;
+    char Reserved12;
     int32_t IssuePDate;
-    char Reserved;
+    char Reserved13;
     int32_t IssueMaturityDate;
-    char Reserved;
+    char Reserved14;
     int16_t FreezePercent;
-    char Reserved;
+    char Reserved15;
     int32_t ListingDate;
-    char Reserved;
+    char Reserved16;
     int32_t ExpulsionDate;
-    char Reserved;
+    char Reserved17;
     int32_t ReAdmissionDate;
-    char Reserved;
+    char Reserved18;
     int32_t ExDate;
-    char Reserved;
+    char Reserved19;
     int32_t RecordDate;
-    char Reserved;
+    char Reserved20;
     int32_t NoDeliveryStartDate;
-    char Reserved;
+    char Reserved21;
     int32_t NoDeliveryEndDate;
-    char Reserved;
+    char Reserved22;
     char ParticipateIndex;
-    char Reserved;
+    char Reserved23;
     char AON;
-    char Reserved;
+    char Reserved24;
     char MinFill;
-    char Reserved;
+    char Reserved25;
     int16_t WarningPercent;
-    char Reserved;
+    char Reserved26;
     int32_t BookClosureStartDate;
-    char Reserved;
+    char Reserved27;
     int32_t BookClosureEndDate;
-    char Reserved;
+    char Reserved28;
     char Dividend;
-    char Reserved;
+    char Reserved29;
     char Rights;
-    char Reserved;
+    char Reserved30;
     char Bonus;
-    char Reserved;
+    char Reserved31;
     char Interest;
-    char Reserved;
+    char Reserved32;
     char AGM;
-    char Reserved;
+    char Reserved33;
     char EGM;
-    char Reserved;
+    char Reserved34;
     char Remark[25];
-    char Reserved;
+    char Reserved35;
     int32_t LocalDBUpdateDateTime;
-    char Reserved;
+    char Reserved36;
     char DeleteFlag;
-    char Reserved;
+    char Reserved37;
     int32_t FaceValue;
-    char Reserved;
+    char Reserved38;
     char ISIN[12];
 };
 
@@ -2039,7 +2065,7 @@ struct MS_OM_REQUEST_TR {
     double NnField;
     char PAN[10];
     int32_t AlgoID;
-    int16_t Reserved;
+    int16_t Reserved1;
     int64_t LastActivityReference;
     char Reserved2[24];
 };
@@ -2083,9 +2109,9 @@ struct MS_OE_RESPONSE_TR {
     int64_t TimeStamp;
     char PAN[10];
     int32_t AlgoID;
-    int16_t Reserved;
+    int16_t Reserved1;
     int64_t LastActivityReference;
-    char Reserved[52];
+    char Reserved2[52];
 };
 
 
@@ -2098,7 +2124,7 @@ struct MS_TRADE_CONFIRM_TR {
     double Timestamp2;
     double ResponseOrderNumber;
     char BrokerId[5];
-    char Reserved[1];
+    char Reserved1[1];
     char AccountNumber[10];
     int16_t BuySellIndicator;
     int32_t OriginalVolume;
@@ -2166,9 +2192,26 @@ namespace TransactionCodes {
     const int16_t ORDER_ENTRY_REQUEST_TR = 20000;
     const int16_t ORDER_MODIFY_REQUEST_TR = 20040;
     const int16_t TRADE_MOD_IN = 5445;
-    const int16_t TRADE_ERROR = 2223; 
+    const int16_t TRADE_ERROR = 2223;
+    const int16_t ON_STOP_NOTIFICATION = 2212;
+    const int16_t TRADE_CONFIRMATION = 2222;
+    const int16_t TRADE_MODIFY_CONFIRM = 2287;
+    const int16_t TRADE_MODIFY_REJECT = 2288;
+    const int16_t TRADE_CANCEL_CONFIRM = 2282;
+    const int16_t TRADE_CANCEL_REJECT = 2286;
     const int16_t TRADE_CANCEL_IN = 5440;
     const int16_t TRADE_CANCEL_OUT = 5441;
+    const int16_t USER_ORDER_LIMIT_UPDATE_OUT = 5731;
+    const int16_t DEALER_LIMIT_UPDATE_OUT = 5733;
+    const int16_t SPD_ORD_LIMIT_UPDATE_OUT = 5772;
+    const int16_t CTRL_MSG_TO_TRADER = 5295;
+    const int16_t BCAST_JRNL_VCT_MSG = 6501;
+    const int16_t RPRT_MARKET_STATS_OUT_RPT = 1833;
+    const int16_t ENHNCD_RPRT_MARKET_STATS_OUT_RPT = 11833;
+    const int16_t MKT_IDX_RPT_DATA = 1836;
+    const int16_t IND_IDX_RPT_DATA_CODE = 1837;
+    const int16_t SECT_IDX_RPT_DATA_CODE = 1838;
+    const int16_t SPD_BC_JRNL_VCT_MSG = 1862;
     const int16_t SP_BOARD_LOT_IN = 2100;
     const int16_t SP_ORDER_MOD_IN = 2118;
     const int16_t SP_ORDER_CANCEL_IN = 2106;
@@ -2181,6 +2224,16 @@ namespace TransactionCodes {
     const int16_t BATCH_SPREAD_CXL_OUT = 9004;
     const int16_t BCAST_SPD_MSTR_CHG = 7309;
     const int16_t BCAST_SPD_MSTR_CHG_PERIODIC = 7341;
+    const int16_t TWOL_BOARD_LOT_IN = 2102;
+    const int16_t THRL_BOARD_LOT_IN = 2104;
+    const int16_t TXN_EXT_TWOL_BOARD_LOT_ACK_IN = 20410;
+    const int16_t TXN_EXT_THRL_BOARD_LOT_ACK_IN = 20412;
+    const int16_t TWOL_ORDER_CONFIRMATION = 2125;
+    const int16_t THRL_ORDER_CONFIRMATION = 2126;
+    const int16_t TWOL_ORDER_CXL_CONFIRMATION = 2131;
+    const int16_t THRL_ORDER_CXL_CONFIRMATION = 2132;
+    const int16_t TWOL_ORDER_ERROR = 2155;
+    const int16_t THRL_ORDER_ERROR = 2156;
 }
 
 // Error Codes
@@ -2194,6 +2247,7 @@ namespace ErrorCodes {
     const int16_t OE_QTY_FREEZE_CAN = 16307;
     const int16_t OE_PRICE_FREEZE_CAN = 16308;
     const int16_t OE_ORD_CANNOT_CANCEL = 16344;
+    const int16_t OE_ADMIN_SUSP_CAN = 16404;
     const int16_t OE_ORD_CANNOT_MODIFY = 16346;
     const int16_t INVALID_ORDER = 16419;
     const int16_t CLOSEOUT_ORDER_REJECT = 16686;
@@ -2201,11 +2255,48 @@ namespace ErrorCodes {
     const int16_t CLOSEOUT_TRDMOD_REJECT = 16690;
     const int16_t MARKET_CLOSED = 16000;
     const int16_t e$gtc_gtd_ord_not_allowed_pclose = 16229;
-    const int16_t e$invalid_contract_comb = 16627; 
+    const int16_t e$invalid_contract_comb = 16627;
     const int16_t e$invalid_pro_client = 16414;
     const int16_t e$invalid_cli_ac = 16632;
     const int16_t OE_QUANTITY_NOT_MULT_RL = 16328;
     const int16_t e$price_diff_out_of_range = 16713;
+    const int16_t e_dup_request = 16800;
+    const int16_t E_invalid_fill_number = 16801;
+    const int16_t E_not_your_fill = 16802;
+    const int16_t OE_DIFF_TRD_MOD_VOL = 16803;
+    const int16_t ERR_DATA_NOT_CHANGED = 16804;
+    const int16_t e_dup_trd_cxl_request = 16805;
+    const int16_t SECURITY_NOT_AVAILABLE = 16035;
+    const int16_t STOCK_SUSPENDED = 16049;
+    const int16_t OE_SECURITY_MATURED = 16280;
+    const int16_t OE_SECURITY_EXPELLED = 16281;
+    const int16_t OE_SECURITY_NOT_ADMITTED = 16279;
+    const int16_t OE_SECURITY_INELIGIBLE = 16387;
+    const int16_t OE_ISSUED_CAP_EXCEEDS = 16282;
+    const int16_t OE_PRICE_NOT_MULT = 16283;
+    const int16_t OE_PRICE_EXCEEDS_DAY_MIN_MAX = 16284;
+    const int16_t ERROR_INVALID_PRICE = 16247;
+    const int16_t BROKER_NOT_FOUND = 16041;
+    const int16_t OE_IS_SUSPENDED = 16330;
+    const int16_t ERR_USER_DISABLED = 16134;
+    const int16_t OE_INQ_NOT_ALLOWED = 16372;
+    const int16_t OE_BRANCH_LIMIT_EXCEEDED = 16333;
+    const int16_t e$gtcgtd_not_allowed = 16667;
+    const int16_t e$invalid_order_parameters = 16416;
+    const int16_t e$invalid_instructions = 16415;
+    const int16_t e$qty_should_be_same = 16610;
+    const int16_t e$either_leg_failed = 16605;
+    const int16_t ERR_USR_ORD_VALUE_LIMIT_EXCEEDED = 16444;
+    const int16_t ERR_ORD_VAL_EXCEEDED = 16600;
+    const int16_t PREOPEN_TRADE_CANCELLATION_NOT_ALLOWED = 16055;
+    const int16_t EC_TRD_MOD_REJ_CLI_CP_MOD_NOT_ALLOWED = 17039;
+    const int16_t USER_TRD_MOD_DISABLED = 17046;
+    const int16_t MSG_CODE_VOLUNTARY_CLOSE_OUT_STATUS = 16797;
+    const int16_t MSG_CODE_SUSPENDED_STATUS = 16798;
+    const int16_t e$order_cancelled_for_vc = 16795;
+    const int16_t e$order_cancelled_for_ssd = 16796;
+    const int16_t e$fok_order_cancelled = 16388;
+    const int16_t e$order_cancelled_for_self_trade = 17071;
 }
 
 // Reason Codes
@@ -2215,9 +2306,61 @@ namespace ReasonCodes {
     const int16_t QUANTITY_FREEZE = 18;
 }
 
+// Activity Types
+namespace ActivityTypes {
+    const int16_t ORIGINAL_ORDER = 1;
+    const int16_t ACTIVITY_TRADE = 2;
+    const int16_t ACTIVITY_ORDER_CXL = 3;
+    const int16_t ACTIVITY_ORDER_MOD = 4;
+    const int16_t ACTIVITY_TRADE_MOD = 5;
+    const int16_t ACTIVITY_TRADE_CXL_1 = 6;
+    const int16_t ACTIVITY_TRADE_CXL_2 = 7;
+    const int16_t ACTIVITY_BATCH_ORDER_CXL = 8;
+    const int16_t ACTIVITY_ORDER_MOD_REJECT = 9;
+    const int16_t ACTIVITY_TRADE_MOD_REJECT = 10;
+    const int16_t ACTIVITY_TRADE_CXL_REJECT = 11;
+    const int16_t ACTIVITY_ORDER_REJECTED = 12;
+    const int16_t ACTIVITY_ORDER_CXL_REJECT = 14;
+    const int16_t ACTIVITY_PRICE_FREEZE_IN = 15;
+    const int16_t ACTIVITY_PRICE_FREEZE_CXLD = 16;
+    const int16_t ACTIVITY_FREEZE_ADMIN_SUSP = 17;
+    const int16_t ACTIVITY_QTY_FREEZE_IN = 18;
+    const int16_t ACTIVITY_QTY_FREEZE_CXLD = 19;
+    const int16_t ACTIVITY_ORD_BROKER_SUSP = 20;
+    const int16_t ACTIVITY_SPREAD_TRADE_CXL = 43;
+}
+
 // Broker Types
 namespace BrokerTypes {
     const char CORPORATE_MANAGER = 'C';
     const char BRANCH_MANAGER = 'B';
     const char DEALER = 'D';
 }
+
+// Bhavcopy Message Types
+namespace BhavcopyMessageTypes {
+    // Header types
+    const char HEADER_REGULAR = 'H';
+    const char HEADER_ADDITIONAL = 'X';
+    const char HEADER_FINAL = 'L';
+
+    // Data types
+    const char DATA_REGULAR = 'R';
+    const char DATA_ADDITIONAL = 'Y';
+    const char DATA_FINAL = 'M';
+
+    // Trailer types
+    const char TRAILER_REGULAR = 'T';
+    const char TRAILER_ADDITIONAL = 'Z';
+    const char TRAILER_FINAL = 'N';
+}
+
+// Market Types
+namespace MarketTypes {
+    const int16_t MARKET_TYPE_NORMAL = 1;
+    const int16_t MARKET_TYPE_ODDLOT = 2;
+    const int16_t MARKET_TYPE_SPOT = 3;
+    const int16_t MARKET_TYPE_AUCTION = 4;
+}
+
+#pragma pack(pop)

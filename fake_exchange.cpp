@@ -202,7 +202,8 @@ bool FakeNSEExchange::is_contract_match(const MS_OE_REQUEST* order, const CONTRA
     if (contract->StrikePrice != 0 && order->ContractDesc.StrikePrice != contract->StrikePrice) {
         return false;
     }
-    if (contract->OptionType != 0 && order->ContractDesc.OptionType != contract->OptionType) {
+    if (contract->OptionType[0] != '\0' &&
+        strncmp(order->ContractDesc.OptionType, contract->OptionType, sizeof(contract->OptionType)) != 0) {
         return false;
     }
     return true;
@@ -514,6 +515,28 @@ size_t FakeNSEExchange::try_parse_message(const uint8_t* buf, size_t remaining, 
             }
             const MS_SPD_OE_REQUEST* req = reinterpret_cast<const MS_SPD_OE_REQUEST*>(buf);
             handle_spread_order_cancellation_request(req, ts);
+            break;
+        }
+
+        case TransactionCodes::TWOL_BOARD_LOT_IN:
+        case TransactionCodes::TXN_EXT_TWOL_BOARD_LOT_ACK_IN: {
+            if (header->MessageLength < sizeof(MS_SPD_OE_REQUEST)) {
+                error = true;
+                return 0;
+            }
+            const MS_SPD_OE_REQUEST* req = reinterpret_cast<const MS_SPD_OE_REQUEST*>(buf);
+            handle_2l_order_entry_request(req, ts);
+            break;
+        }
+
+        case TransactionCodes::THRL_BOARD_LOT_IN:
+        case TransactionCodes::TXN_EXT_THRL_BOARD_LOT_ACK_IN: {
+            if (header->MessageLength < sizeof(MS_SPD_OE_REQUEST)) {
+                error = true;
+                return 0;
+            }
+            const MS_SPD_OE_REQUEST* req = reinterpret_cast<const MS_SPD_OE_REQUEST*>(buf);
+            handle_3l_order_entry_request(req, ts);
             break;
         }
 
@@ -2014,7 +2037,9 @@ void FakeNSEExchange::send_spread_order_response(const MS_SPD_OE_REQUEST* req, u
     if (message_callback_) {
         message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
     }
-}void FakeNSEExchange::handle_spread_order_modification_request(const MS_SPD_OE_REQUEST* req, uint64_t ts) {
+}
+
+void FakeNSEExchange::handle_spread_order_modification_request(const MS_SPD_OE_REQUEST* req, uint64_t ts) {
     std::cout << "Spread order modification request from trader: " << req->Header.TraderId 
               << " - OrderNumber: " << req->OrderNumber1 << std::endl;
     
@@ -2218,10 +2243,12 @@ void FakeNSEExchange::process_successful_spread_modification(MS_SPD_OE_REQUEST& 
     // Mark as modified
     original_order.OrderFlags.Modified = 1;
     
-    std::cout << "Spread order successfully modified - New Volume1: " << original_order.Volume1 
+    std::cout << "Spread order successfully modified - New Volume1: " << original_order.Volume1
               << ", New Volume2: " << original_order.MS_SPD_LEG_INFO_leg2.Volume2
               << ", New PriceDiff: " << original_order.PriceDiff << std::endl;
-}// Spread Combination Master Update Broadcast Implementation
+}
+
+// Spread Combination Master Update Broadcast Implementation
 
 void FakeNSEExchange::broadcast_spread_combination_update(const MS_SPD_UPDATE_INFO& update_info, uint64_t ts) {
     std::cout << "Broadcasting spread combination master update for tokens: " 
@@ -2343,10 +2370,1190 @@ bool FakeNSEExchange::is_valid_spread_combination(int32_t token1, int32_t token2
     }
     
     const MS_SPD_UPDATE_INFO& combination = it->second;
-    
+
     // Check if combination is eligible and not deleted
     bool is_eligible = (combination.SPDEligibility.Eligibility == 1);
     bool is_not_deleted = (combination.DeleteFlag != 'Y');
-    
+
     return is_eligible && is_not_deleted;
+}
+
+// 2L/3L Order Helper Methods
+bool FakeNSEExchange::are_quantities_matching(const MS_SPD_OE_REQUEST* req, bool is_3l) const {
+    // All legs must have the same quantity
+    if (req->Volume1 != req->MS_SPD_LEG_INFO_leg2.Volume2) {
+        return false;
+    }
+
+    if (is_3l && req->Volume1 != req->MS_SPD_LEG_INFO_leg3.Volume2) {
+        return false;
+    }
+
+    return true;
+}
+
+bool FakeNSEExchange::are_tokens_same_stream(int32_t token1, int32_t token2, int32_t token3, bool is_3l) const {
+    // Extract stream from token (first 2 digits)
+    int32_t stream1 = token1 / 100000000;
+    int32_t stream2 = token2 / 100000000;
+
+    if (stream1 != stream2) {
+        return false;
+    }
+
+    if (is_3l) {
+        int32_t stream3 = token3 / 100000000;
+        if (stream1 != stream3) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool FakeNSEExchange::is_valid_2l_3l_order(const MS_SPD_OE_REQUEST* req, bool is_3l) const {
+    // GTC/GTD not allowed for 2L/3L
+    if (req->OrderFlags.GTC || req->GoodTillDate1 != 0) {
+        return false;
+    }
+
+    // IOC must be set
+    if (!req->OrderFlags.IOC) {
+        return false;
+    }
+
+    // Disclosed quantity not allowed
+    if (req->DisclosedVol1 > 0 || req->MS_SPD_LEG_INFO_leg2.DisclosedVol2 > 0) {
+        return false;
+    }
+
+    if (is_3l && req->MS_SPD_LEG_INFO_leg3.DisclosedVol2 > 0) {
+        return false;
+    }
+
+    // Contracts cannot be the same
+    if (req->Token1 == req->MS_SPD_LEG_INFO_leg2.Token2) {
+        return false;
+    }
+
+    if (is_3l) {
+        if (req->Token1 == req->MS_SPD_LEG_INFO_leg3.Token2 ||
+            req->MS_SPD_LEG_INFO_leg2.Token2 == req->MS_SPD_LEG_INFO_leg3.Token2) {
+            return false;
+        }
+    }
+
+    // Quantities must match
+    if (!are_quantities_matching(req, is_3l)) {
+        return false;
+    }
+
+    // Tokens must be from same stream
+    if (!are_tokens_same_stream(req->Token1, req->MS_SPD_LEG_INFO_leg2.Token2,
+                                 req->MS_SPD_LEG_INFO_leg3.Token2, is_3l)) {
+        return false;
+    }
+
+    return true;
+}
+
+// 2L Order Entry Handler
+void FakeNSEExchange::handle_2l_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts) {
+    std::cout << "2L order entry request from trader: " << req->Header.TraderId
+              << " - Token1: " << req->Token1
+              << ", Token2: " << req->MS_SPD_LEG_INFO_leg2.Token2 << std::endl;
+
+    // Check if trader is logged in
+    if (logged_in_traders_.find(req->Header.TraderId) == logged_in_traders_.end()) {
+        std::cout << "Trader " << req->Header.TraderId << " not logged in" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::USER_NOT_FOUND);
+        return;
+    }
+
+    // Check if markets are open
+    if (current_market_status_.Normal != 1) {
+        std::cout << "Market is not open for 2L orders" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::MARKET_CLOSED);
+        return;
+    }
+
+    // Get broker ID
+    std::string broker_id(req->BrokerId1, 5);
+    broker_id.erase(broker_id.find_last_not_of(' ') + 1);
+
+    // Check broker status
+    if (is_broker_in_closeout(broker_id)) {
+        std::cout << "Broker " << broker_id << " is in closeout" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::CLOSEOUT_ORDER_REJECT);
+        return;
+    }
+
+    if (is_broker_deactivated(broker_id)) {
+        std::cout << "Broker " << broker_id << " is deactivated" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::OE_IS_NOT_ACTIVE);
+        return;
+    }
+
+    // Validate 2L order parameters
+    if (!is_valid_2l_3l_order(req, false)) {
+        std::cout << "Invalid 2L order parameters" << std::endl;
+
+        // Check specific error conditions
+        if (req->OrderFlags.GTC || req->GoodTillDate1 != 0) {
+            send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::e$gtcgtd_not_allowed);
+        } else if (!are_quantities_matching(req, false)) {
+            send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::e$qty_should_be_same);
+        } else if (!are_tokens_same_stream(req->Token1, req->MS_SPD_LEG_INFO_leg2.Token2, 0, false)) {
+            send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::e$invalid_contract_comb);
+        } else if (req->Token1 == req->MS_SPD_LEG_INFO_leg2.Token2) {
+            send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::e$invalid_contract_comb);
+        } else {
+            send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::e$invalid_order_parameters);
+        }
+        return;
+    }
+
+    // Get account number
+    std::string account(req->AccountNumber1, 10);
+    account.erase(account.find_last_not_of(' ') + 1);
+
+    // PRO order validation
+    if (!is_valid_pro_order(req->ProClient1, account, broker_id)) {
+        std::cout << "Invalid PRO order configuration" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::e$invalid_pro_client);
+        return;
+    }
+
+    // CLI order validation
+    if (!is_valid_cli_order(req->ProClient1, account, broker_id)) {
+        std::cout << "Invalid CLI order configuration" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::e$invalid_cli_ac);
+        return;
+    }
+
+    // Quantity validation - must be multiple of regular lot
+    const int32_t REGULAR_LOT = 1;
+    if (req->Volume1 % REGULAR_LOT != 0 || req->MS_SPD_LEG_INFO_leg2.Volume2 % REGULAR_LOT != 0) {
+        std::cout << "Quantity must be multiple of regular lot" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_ERROR, ErrorCodes::OE_QUANTITY_NOT_MULT_RL);
+        return;
+    }
+
+    // Process 2L order - IOC by default
+    std::cout << "Processing 2L order as IOC" << std::endl;
+
+    // Simulate order processing (70% full match, 20% partial match, 10% error)
+    int outcome = rand() % 100;
+
+    if (outcome < 70) {
+        // Full match - send confirmation
+        std::cout << "2L order fully matched" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_CONFIRMATION, ErrorCodes::SUCCESS);
+
+    } else if (outcome < 90) {
+        // Partial match - send confirmation then cancellation for unmatched
+        std::cout << "2L order partially matched" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_CONFIRMATION, ErrorCodes::SUCCESS);
+
+        // Send cancellation for unmatched portion
+        std::cout << "Sending cancellation for unmatched portion" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_CXL_CONFIRMATION, ErrorCodes::SUCCESS);
+
+    } else {
+        // No match - send cancellation only
+        std::cout << "2L order not matched - IOC cancellation" << std::endl;
+        send_2l_order_response(req, ts, TransactionCodes::TWOL_ORDER_CXL_CONFIRMATION, ErrorCodes::SUCCESS);
+    }
+}
+
+// 3L Order Entry Handler
+void FakeNSEExchange::handle_3l_order_entry_request(const MS_SPD_OE_REQUEST* req, uint64_t ts) {
+    std::cout << "3L order entry request from trader: " << req->Header.TraderId
+              << " - Token1: " << req->Token1
+              << ", Token2: " << req->MS_SPD_LEG_INFO_leg2.Token2
+              << ", Token3: " << req->MS_SPD_LEG_INFO_leg3.Token2 << std::endl;
+
+    // Check if trader is logged in
+    if (logged_in_traders_.find(req->Header.TraderId) == logged_in_traders_.end()) {
+        std::cout << "Trader " << req->Header.TraderId << " not logged in" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::USER_NOT_FOUND);
+        return;
+    }
+
+    // Check if markets are open
+    if (current_market_status_.Normal != 1) {
+        std::cout << "Market is not open for 3L orders" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::MARKET_CLOSED);
+        return;
+    }
+
+    // Get broker ID
+    std::string broker_id(req->BrokerId1, 5);
+    broker_id.erase(broker_id.find_last_not_of(' ') + 1);
+
+    // Check broker status
+    if (is_broker_in_closeout(broker_id)) {
+        std::cout << "Broker " << broker_id << " is in closeout" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::CLOSEOUT_ORDER_REJECT);
+        return;
+    }
+
+    if (is_broker_deactivated(broker_id)) {
+        std::cout << "Broker " << broker_id << " is deactivated" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::OE_IS_NOT_ACTIVE);
+        return;
+    }
+
+    // Validate 3L order parameters
+    if (!is_valid_2l_3l_order(req, true)) {
+        std::cout << "Invalid 3L order parameters" << std::endl;
+
+        // Check specific error conditions
+        if (req->OrderFlags.GTC || req->GoodTillDate1 != 0) {
+            send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::e$gtcgtd_not_allowed);
+        } else if (!are_quantities_matching(req, true)) {
+            send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::e$qty_should_be_same);
+        } else if (!are_tokens_same_stream(req->Token1, req->MS_SPD_LEG_INFO_leg2.Token2, req->MS_SPD_LEG_INFO_leg3.Token2, true)) {
+            send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::e$invalid_contract_comb);
+        } else if (req->Token1 == req->MS_SPD_LEG_INFO_leg2.Token2 ||
+                   req->Token1 == req->MS_SPD_LEG_INFO_leg3.Token2 ||
+                   req->MS_SPD_LEG_INFO_leg2.Token2 == req->MS_SPD_LEG_INFO_leg3.Token2) {
+            send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::e$invalid_contract_comb);
+        } else {
+            send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::e$invalid_order_parameters);
+        }
+        return;
+    }
+
+    // Get account number
+    std::string account(req->AccountNumber1, 10);
+    account.erase(account.find_last_not_of(' ') + 1);
+
+    // PRO order validation
+    if (!is_valid_pro_order(req->ProClient1, account, broker_id)) {
+        std::cout << "Invalid PRO order configuration" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::e$invalid_pro_client);
+        return;
+    }
+
+    // CLI order validation
+    if (!is_valid_cli_order(req->ProClient1, account, broker_id)) {
+        std::cout << "Invalid CLI order configuration" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::e$invalid_cli_ac);
+        return;
+    }
+
+    // Quantity validation - must be multiple of regular lot
+    const int32_t REGULAR_LOT = 1;
+    if (req->Volume1 % REGULAR_LOT != 0 ||
+        req->MS_SPD_LEG_INFO_leg2.Volume2 % REGULAR_LOT != 0 ||
+        req->MS_SPD_LEG_INFO_leg3.Volume2 % REGULAR_LOT != 0) {
+        std::cout << "Quantity must be multiple of regular lot" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_ERROR, ErrorCodes::OE_QUANTITY_NOT_MULT_RL);
+        return;
+    }
+
+    // Process 3L order - IOC by default
+    std::cout << "Processing 3L order as IOC" << std::endl;
+
+    // Simulate order processing (70% full match, 20% partial match, 10% error)
+    int outcome = rand() % 100;
+
+    if (outcome < 70) {
+        // Full match - send confirmation
+        std::cout << "3L order fully matched" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_CONFIRMATION, ErrorCodes::SUCCESS);
+
+    } else if (outcome < 90) {
+        // Partial match - send confirmation then cancellation for unmatched
+        std::cout << "3L order partially matched" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_CONFIRMATION, ErrorCodes::SUCCESS);
+
+        // Send cancellation for unmatched portion
+        std::cout << "Sending cancellation for unmatched portion" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_CXL_CONFIRMATION, ErrorCodes::SUCCESS);
+
+    } else {
+        // No match - send cancellation only
+        std::cout << "3L order not matched - IOC cancellation" << std::endl;
+        send_3l_order_response(req, ts, TransactionCodes::THRL_ORDER_CXL_CONFIRMATION, ErrorCodes::SUCCESS);
+    }
+}
+
+// 2L Order Response Sender
+void FakeNSEExchange::send_2l_order_response(const MS_SPD_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code, int16_t reason_code) {
+    MS_SPD_OE_REQUEST response;
+    memset(&response, 0, sizeof(response));
+
+    // Copy original request structure and modify header
+    response = *req;
+    response.Header.TransactionCode = transaction_code;
+    response.Header.ErrorCode = error_code;
+    response.Header.MessageLength = sizeof(MS_SPD_OE_REQUEST);
+
+    // Set reason code
+    response.ReasonCode1 = reason_code;
+
+    // Generate order number and activity reference for confirmed orders
+    if (transaction_code == TransactionCodes::TWOL_ORDER_CONFIRMATION) {
+        response.OrderNumber1 = generate_order_number(ts);
+        response.EntryDateTime1 = static_cast<int32_t>(ts / 1000000);
+        response.LastModified1 = static_cast<int32_t>(ts / 1000000);
+        response.LastActivityReference = generate_activity_reference(ts);
+
+        // Simulate partial fill (50% of cases when matched)
+        if (rand() % 2 == 0) {
+            response.VolumeFilledToday1 = response.Volume1 / 2;
+            response.TotalVolRemaining1 = response.Volume1 - response.VolumeFilledToday1;
+            response.MS_SPD_LEG_INFO_leg2.VolumeFilledToday2 = response.MS_SPD_LEG_INFO_leg2.Volume2 / 2;
+            response.MS_SPD_LEG_INFO_leg2.TotalVolRemaining2 = response.MS_SPD_LEG_INFO_leg2.Volume2 - response.MS_SPD_LEG_INFO_leg2.VolumeFilledToday2;
+            response.OrderFlags.Traded = 1;
+        } else {
+            // Full fill
+            response.VolumeFilledToday1 = response.Volume1;
+            response.TotalVolRemaining1 = 0;
+            response.MS_SPD_LEG_INFO_leg2.VolumeFilledToday2 = response.MS_SPD_LEG_INFO_leg2.Volume2;
+            response.MS_SPD_LEG_INFO_leg2.TotalVolRemaining2 = 0;
+            response.OrderFlags.Traded = 1;
+        }
+
+        std::cout << "Generated 2L order number: " << response.OrderNumber1 << std::endl;
+    }
+
+    // Handle cancellation response
+    if (transaction_code == TransactionCodes::TWOL_ORDER_CXL_CONFIRMATION) {
+        response.LastModified1 = static_cast<int32_t>(ts / 1000000);
+        response.TotalVolRemaining1 = 0;  // All cancelled
+        response.MS_SPD_LEG_INFO_leg2.TotalVolRemaining2 = 0;
+    }
+
+    // Log the response
+    std::cout << "Sending 2L order response: TransactionCode=" << transaction_code
+              << ", ErrorCode=" << error_code
+              << ", ReasonCode=" << reason_code;
+
+    if (transaction_code == TransactionCodes::TWOL_ORDER_CONFIRMATION) {
+        std::cout << ", OrderNumber=" << response.OrderNumber1;
+    }
+
+    std::cout << std::endl;
+
+    // Send response via callback
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
+    }
+}
+
+// 3L Order Response Sender
+void FakeNSEExchange::send_3l_order_response(const MS_SPD_OE_REQUEST* req, uint64_t ts, int16_t transaction_code, int16_t error_code, int16_t reason_code) {
+    MS_SPD_OE_REQUEST response;
+    memset(&response, 0, sizeof(response));
+
+    // Copy original request structure and modify header
+    response = *req;
+    response.Header.TransactionCode = transaction_code;
+    response.Header.ErrorCode = error_code;
+    response.Header.MessageLength = sizeof(MS_SPD_OE_REQUEST);
+
+    // Set reason code
+    response.ReasonCode1 = reason_code;
+
+    // Generate order number and activity reference for confirmed orders
+    if (transaction_code == TransactionCodes::THRL_ORDER_CONFIRMATION) {
+        response.OrderNumber1 = generate_order_number(ts);
+        response.EntryDateTime1 = static_cast<int32_t>(ts / 1000000);
+        response.LastModified1 = static_cast<int32_t>(ts / 1000000);
+        response.LastActivityReference = generate_activity_reference(ts);
+
+        // Simulate partial fill (50% of cases when matched)
+        if (rand() % 2 == 0) {
+            response.VolumeFilledToday1 = response.Volume1 / 2;
+            response.TotalVolRemaining1 = response.Volume1 - response.VolumeFilledToday1;
+            response.MS_SPD_LEG_INFO_leg2.VolumeFilledToday2 = response.MS_SPD_LEG_INFO_leg2.Volume2 / 2;
+            response.MS_SPD_LEG_INFO_leg2.TotalVolRemaining2 = response.MS_SPD_LEG_INFO_leg2.Volume2 - response.MS_SPD_LEG_INFO_leg2.VolumeFilledToday2;
+            response.MS_SPD_LEG_INFO_leg3.VolumeFilledToday2 = response.MS_SPD_LEG_INFO_leg3.Volume2 / 2;
+            response.MS_SPD_LEG_INFO_leg3.TotalVolRemaining2 = response.MS_SPD_LEG_INFO_leg3.Volume2 - response.MS_SPD_LEG_INFO_leg3.VolumeFilledToday2;
+            response.OrderFlags.Traded = 1;
+        } else {
+            // Full fill
+            response.VolumeFilledToday1 = response.Volume1;
+            response.TotalVolRemaining1 = 0;
+            response.MS_SPD_LEG_INFO_leg2.VolumeFilledToday2 = response.MS_SPD_LEG_INFO_leg2.Volume2;
+            response.MS_SPD_LEG_INFO_leg2.TotalVolRemaining2 = 0;
+            response.MS_SPD_LEG_INFO_leg3.VolumeFilledToday2 = response.MS_SPD_LEG_INFO_leg3.Volume2;
+            response.MS_SPD_LEG_INFO_leg3.TotalVolRemaining2 = 0;
+            response.OrderFlags.Traded = 1;
+        }
+
+        std::cout << "Generated 3L order number: " << response.OrderNumber1 << std::endl;
+    }
+
+    // Handle cancellation response
+    if (transaction_code == TransactionCodes::THRL_ORDER_CXL_CONFIRMATION) {
+        response.LastModified1 = static_cast<int32_t>(ts / 1000000);
+        response.TotalVolRemaining1 = 0;  // All cancelled
+        response.MS_SPD_LEG_INFO_leg2.TotalVolRemaining2 = 0;
+        response.MS_SPD_LEG_INFO_leg3.TotalVolRemaining2 = 0;
+    }
+
+    // Log the response
+    std::cout << "Sending 3L order response: TransactionCode=" << transaction_code
+              << ", ErrorCode=" << error_code
+              << ", ReasonCode=" << reason_code;
+
+    if (transaction_code == TransactionCodes::THRL_ORDER_CONFIRMATION) {
+        std::cout << ", OrderNumber=" << response.OrderNumber1;
+    }
+
+    std::cout << std::endl;
+
+    // Send response via callback
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
+    }
+}
+
+// ===== Chapter 7: Unsolicited Messages Implementation =====
+
+// Send Stop Loss Notification (Transaction Code 2212)
+void FakeNSEExchange::send_stop_loss_notification(const MS_OE_REQUEST& order, uint64_t ts) {
+    MS_TRADE_CONFIRM notification;
+    memset(&notification, 0, sizeof(notification));
+
+    // Set header
+    notification.Header.TransactionCode = TransactionCodes::ON_STOP_NOTIFICATION;
+    notification.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    notification.Header.TraderId = order.TraderId;
+    notification.Header.ErrorCode = 0;
+    notification.Header.Timestamp = ts;
+    notification.Header.MessageLength = sizeof(MS_TRADE_CONFIRM);
+
+    // Set order details
+    notification.ResponseOrderNumber = order.OrderNumber;
+    memcpy(notification.BrokerId, order.BrokerId, sizeof(notification.BrokerId));
+    notification.TraderNumber = order.TraderId;
+    memcpy(notification.AccountNumber, order.AccountNumber, sizeof(notification.AccountNumber));
+    notification.BuySellIndicator = order.BuySellIndicator;
+    notification.OriginalVolume = order.Volume;
+    notification.DisclosedVolume = order.DisclosedVolume;
+    notification.RemainingVolume = order.TotalVolumeRemaining;
+    notification.DisclosedVolumeRemaining = order.DisclosedVolumeRemaining;
+    notification.Price = order.Price;
+    notification.OrderFlags = order.OrderFlags;
+    notification.OrderFlags.SL = 1;  // Mark as Stop Loss trigger
+    notification.GoodTillDate = order.GoodTillDate;
+    notification.VolumeFilledToday = order.VolumeFilledToday;
+    notification.ActivityType[0] = order.BuySellIndicator == 1 ? 'B' : 'S';
+    notification.ActivityType[1] = '\0';
+    notification.ActivityTime = static_cast<int32_t>(ts / 1000000);
+    notification.Token = order.TokenNo;
+    notification.ContractDesc = order.ContractDesc;
+    notification.OpenClose = order.OpenClose;
+    notification.BookType = order.BookType;
+    memcpy(notification.Participant, order.Settlor, sizeof(notification.Participant));
+    notification.AdditionalOrderFlags = order.AdditionalOrderFlags;
+    memcpy(notification.PAN, order.PAN, sizeof(notification.PAN));
+    notification.AlgoID = order.AlgoID;
+    notification.LastActivityReference = ts;
+
+    std::cout << "Sending Stop Loss notification for order " << order.OrderNumber << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&notification), sizeof(notification));
+    }
+}
+
+// Send Market If Touched Notification (Transaction Code 2212)
+void FakeNSEExchange::send_mit_notification(const MS_OE_REQUEST& order, uint64_t ts) {
+    MS_TRADE_CONFIRM notification;
+    memset(&notification, 0, sizeof(notification));
+
+    // Set header
+    notification.Header.TransactionCode = TransactionCodes::ON_STOP_NOTIFICATION;
+    notification.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    notification.Header.TraderId = order.TraderId;
+    notification.Header.ErrorCode = 0;
+    notification.Header.Timestamp = ts;
+    notification.Header.MessageLength = sizeof(MS_TRADE_CONFIRM);
+
+    // Set order details
+    notification.ResponseOrderNumber = order.OrderNumber;
+    memcpy(notification.BrokerId, order.BrokerId, sizeof(notification.BrokerId));
+    notification.TraderNumber = order.TraderId;
+    memcpy(notification.AccountNumber, order.AccountNumber, sizeof(notification.AccountNumber));
+    notification.BuySellIndicator = order.BuySellIndicator;
+    notification.OriginalVolume = order.Volume;
+    notification.DisclosedVolume = order.DisclosedVolume;
+    notification.RemainingVolume = order.TotalVolumeRemaining;
+    notification.DisclosedVolumeRemaining = order.DisclosedVolumeRemaining;
+    notification.Price = order.Price;
+    notification.OrderFlags = order.OrderFlags;
+    notification.OrderFlags.MIT = 1;  // Mark as MIT trigger
+    notification.GoodTillDate = order.GoodTillDate;
+    notification.VolumeFilledToday = order.VolumeFilledToday;
+    notification.ActivityType[0] = order.BuySellIndicator == 1 ? 'B' : 'S';
+    notification.ActivityType[1] = '\0';
+    notification.ActivityTime = static_cast<int32_t>(ts / 1000000);
+    notification.Token = order.TokenNo;
+    notification.ContractDesc = order.ContractDesc;
+    notification.OpenClose = order.OpenClose;
+    notification.BookType = order.BookType;
+    memcpy(notification.Participant, order.Settlor, sizeof(notification.Participant));
+    notification.AdditionalOrderFlags = order.AdditionalOrderFlags;
+    memcpy(notification.PAN, order.PAN, sizeof(notification.PAN));
+    notification.AlgoID = order.AlgoID;
+    notification.LastActivityReference = ts;
+
+    std::cout << "Sending MIT notification for order " << order.OrderNumber << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&notification), sizeof(notification));
+    }
+}
+
+// Send Freeze Approval (Transaction Code 2073 - ORDER_CONFIRMATION_OUT)
+void FakeNSEExchange::send_freeze_approval(const MS_OE_REQUEST& order, uint64_t ts) {
+    MS_OE_REQUEST response;
+    memcpy(&response, &order, sizeof(MS_OE_REQUEST));
+
+    // Update header for freeze approval
+    response.Header.TransactionCode = TransactionCodes::ORDER_CONFIRMATION_OUT;
+    response.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    response.Header.ErrorCode = 0;
+    response.Header.Timestamp = ts;
+    response.LastModified = static_cast<int32_t>(ts / 1000000);
+    response.LastActivityReference = ts;
+
+    std::cout << "Sending freeze approval for order " << order.OrderNumber
+              << " (reason: " << order.ReasonCode << ")" << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
+    }
+}
+
+// Send Trade Confirmation (Transaction Code 2222)
+void FakeNSEExchange::send_trade_confirmation(const MS_TRADE_CONFIRM& trade, uint64_t ts) {
+    MS_TRADE_CONFIRM confirmation;
+    memcpy(&confirmation, &trade, sizeof(MS_TRADE_CONFIRM));
+
+    // Set header for trade confirmation
+    confirmation.Header.TransactionCode = TransactionCodes::TRADE_CONFIRMATION;
+    confirmation.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    confirmation.Header.ErrorCode = 0;
+    confirmation.Header.Timestamp = ts;
+    confirmation.Header.MessageLength = sizeof(MS_TRADE_CONFIRM);
+
+    // Mark as traded
+    confirmation.OrderFlags.Traded = 1;
+    confirmation.ActivityType[0] = 'B';  // Or 'S' based on buy/sell
+    confirmation.ActivityType[1] = '\0';
+    confirmation.ActivityTime = static_cast<int32_t>(ts / 1000000);
+    confirmation.LastActivityReference = ts;
+
+    std::cout << "Sending trade confirmation: Fill #" << confirmation.FillNumber
+              << ", Qty=" << confirmation.FillQuantity
+              << ", Price=" << confirmation.FillPrice << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&confirmation), sizeof(confirmation));
+    }
+}
+
+// Send Trade Modification Confirmation (Transaction Code 2287)
+void FakeNSEExchange::send_trade_modification_confirmation(const MS_TRADE_CONFIRM& trade, uint64_t ts) {
+    MS_TRADE_CONFIRM confirmation;
+    memcpy(&confirmation, &trade, sizeof(MS_TRADE_CONFIRM));
+
+    confirmation.Header.TransactionCode = TransactionCodes::TRADE_MODIFY_CONFIRM;
+    confirmation.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    confirmation.Header.ErrorCode = 0;
+    confirmation.Header.Timestamp = ts;
+    confirmation.ActivityType[0] = 'T';
+    confirmation.ActivityType[1] = 'M';
+    confirmation.ActivityTime = static_cast<int32_t>(ts / 1000000);
+    confirmation.LastActivityReference = ts;
+
+    std::cout << "Sending trade modification confirmation for fill #" << confirmation.FillNumber << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&confirmation), sizeof(confirmation));
+    }
+}
+
+// Send Trade Modification Rejection (Transaction Code 2288)
+void FakeNSEExchange::send_trade_modification_rejection(const MS_TRADE_CONFIRM& trade, int16_t error_code, uint64_t ts) {
+    MS_TRADE_CONFIRM rejection;
+    memcpy(&rejection, &trade, sizeof(MS_TRADE_CONFIRM));
+
+    rejection.Header.TransactionCode = TransactionCodes::TRADE_MODIFY_REJECT;
+    rejection.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    rejection.Header.ErrorCode = error_code;
+    rejection.Header.Timestamp = ts;
+
+    std::cout << "Sending trade modification rejection for fill #" << rejection.FillNumber
+              << " with error code " << error_code << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&rejection), sizeof(rejection));
+    }
+}
+
+// Send Trade Cancellation Confirmation (Transaction Code 2282)
+void FakeNSEExchange::send_trade_cancellation_confirmation(const MS_TRADE_CONFIRM& trade, uint64_t ts) {
+    MS_TRADE_CONFIRM confirmation;
+    memcpy(&confirmation, &trade, sizeof(MS_TRADE_CONFIRM));
+
+    confirmation.Header.TransactionCode = TransactionCodes::TRADE_CANCEL_CONFIRM;
+    confirmation.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    confirmation.Header.ErrorCode = 0;
+    confirmation.Header.Timestamp = ts;
+    confirmation.ActivityType[0] = 'T';
+    confirmation.ActivityType[1] = 'C';
+    confirmation.ActivityTime = static_cast<int32_t>(ts / 1000000);
+
+    std::cout << "Sending trade cancellation confirmation for fill #" << confirmation.FillNumber << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&confirmation), sizeof(confirmation));
+    }
+}
+
+// Send Trade Cancellation Rejection (Transaction Code 2286)
+void FakeNSEExchange::send_trade_cancellation_rejection(const MS_TRADE_CONFIRM& trade, int16_t error_code, uint64_t ts) {
+    MS_TRADE_CONFIRM rejection;
+    memcpy(&rejection, &trade, sizeof(MS_TRADE_CONFIRM));
+
+    rejection.Header.TransactionCode = TransactionCodes::TRADE_CANCEL_REJECT;
+    rejection.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    rejection.Header.ErrorCode = error_code;
+    rejection.Header.Timestamp = ts;
+
+    std::cout << "Sending trade cancellation rejection for fill #" << rejection.FillNumber
+              << " with error code " << error_code << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&rejection), sizeof(rejection));
+    }
+}
+
+// Send User Order Limit Update (Transaction Code 5731)
+void FakeNSEExchange::send_user_order_limit_update(const MS_ORDER_VAL_LIMIT_DATA& limit_data, uint64_t ts) {
+    MS_ORDER_VAL_LIMIT_DATA update;
+    memcpy(&update, &limit_data, sizeof(MS_ORDER_VAL_LIMIT_DATA));
+
+    update.Header.TransactionCode = TransactionCodes::USER_ORDER_LIMIT_UPDATE_OUT;
+    update.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    update.Header.ErrorCode = 0;
+    update.Header.Timestamp = ts;
+    update.Header.MessageLength = sizeof(MS_ORDER_VAL_LIMIT_DATA);
+
+    std::cout << "Sending user order limit update for user " << update.UserId << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&update), sizeof(update));
+    }
+}
+
+// Send Dealer Limit Update (Transaction Code 5733)
+void FakeNSEExchange::send_dealer_limit_update(const DEALER_ORD_LMT& limit_data, uint64_t ts) {
+    DEALER_ORD_LMT update;
+    memcpy(&update, &limit_data, sizeof(DEALER_ORD_LMT));
+
+    update.Header.TransactionCode = TransactionCodes::DEALER_LIMIT_UPDATE_OUT;
+    update.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    update.Header.ErrorCode = 0;
+    update.Header.Timestamp = ts;
+    update.Header.MessageLength = sizeof(DEALER_ORD_LMT);
+
+    std::cout << "Sending dealer limit update for user " << update.UserId << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&update), sizeof(update));
+    }
+}
+
+// Send Spread Order Limit Update (Transaction Code 5772)
+void FakeNSEExchange::send_spread_order_limit_update(const SPD_ORD_LMT& limit_data, uint64_t ts) {
+    SPD_ORD_LMT update;
+    memcpy(&update, &limit_data, sizeof(SPD_ORD_LMT));
+
+    update.Header.TransactionCode = TransactionCodes::SPD_ORD_LIMIT_UPDATE_OUT;
+    update.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    update.Header.ErrorCode = 0;
+    update.Header.Timestamp = ts;
+    update.Header.MessageLength = sizeof(SPD_ORD_LMT);
+
+    std::cout << "Sending spread order limit update for user " << update.UserId << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&update), sizeof(update));
+    }
+}
+
+// Send Control Message to Trader (Transaction Code 5295)
+void FakeNSEExchange::send_control_message(int32_t trader_id, const char* action_code, const std::string& message, uint64_t ts) {
+    MS_TRADER_INT_MSG msg;
+    memset(&msg, 0, sizeof(msg));
+
+    msg.Header.TransactionCode = TransactionCodes::CTRL_MSG_TO_TRADER;
+    msg.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    msg.Header.TraderId = trader_id;
+    msg.Header.ErrorCode = 0;
+    msg.Header.Timestamp = ts;
+    msg.Header.MessageLength = sizeof(MS_TRADER_INT_MSG);
+
+    msg.TraderId = trader_id;
+    strncpy(msg.ActionCode, action_code, 3);
+    msg.BroadCastMessageLength = std::min(static_cast<int>(message.length()), 239);
+    strncpy(msg.BroadCastMessage, message.c_str(), 239);
+
+    std::cout << "Sending control message to trader " << trader_id
+              << " (action: " << action_code << "): " << message << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
+    }
+}
+
+// Send Broadcast Message (Transaction Code 6501)
+void FakeNSEExchange::send_broadcast_message(const char* broker_id, const char* action_code, const std::string& message, uint64_t ts) {
+    MS_BCAST_MESSAGE msg;
+    memset(&msg, 0, sizeof(msg));
+
+    msg.Header.TransactionCode = TransactionCodes::BCAST_JRNL_VCT_MSG;
+    msg.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    msg.Header.ErrorCode = 0;
+    msg.Header.MessageLength = sizeof(MS_BCAST_MESSAGE);
+
+    memcpy(msg.BrokerNumber, broker_id, std::min(strlen(broker_id), size_t(5)));
+    strncpy(msg.ActionCode, action_code, 3);
+    msg.BCASTDestination.TraderWorkstation = 1;
+    msg.BCASTDestination.JournalingRequired = 1;
+    msg.BroadcastMessageLength = std::min(static_cast<int>(message.length()), 239);
+    strncpy(msg.BroadcastMessage, message.c_str(), 239);
+
+    std::cout << "Sending broadcast message (action: " << action_code << "): " << message << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
+    }
+}
+
+// Send Batch Order Cancel (Transaction Code 9002)
+void FakeNSEExchange::send_batch_order_cancel(const MS_OE_REQUEST& order, uint64_t ts) {
+    MS_OE_REQUEST response;
+    memcpy(&response, &order, sizeof(MS_OE_REQUEST));
+
+    response.Header.TransactionCode = TransactionCodes::BATCH_ORDER_CANCEL;
+    response.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    response.Header.ErrorCode = 0;
+    response.Header.Timestamp = ts;
+    response.LastModified = static_cast<int32_t>(ts / 1000000);
+    response.LastActivityReference = ts;
+
+    std::cout << "Sending batch order cancellation for order " << order.OrderNumber << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
+    }
+}
+
+// Send Batch Spread Cancel (Transaction Code 9004)
+void FakeNSEExchange::send_batch_spread_cancel(const MS_SPD_OE_REQUEST& order, uint64_t ts) {
+    MS_SPD_OE_REQUEST response;
+    memcpy(&response, &order, sizeof(MS_SPD_OE_REQUEST));
+
+    response.Header.TransactionCode = TransactionCodes::BATCH_SPREAD_CXL_OUT;
+    response.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    response.Header.ErrorCode = 0;
+    response.Header.Timestamp = ts;
+    response.LastModified1 = static_cast<int32_t>(ts / 1000000);
+    response.LastActivityReference = ts;
+
+    std::cout << "Sending batch spread cancellation for spread order " << order.OrderNumber1 << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
+    }
+}
+// ===== Chapter 8: Bhavcopy Implementation =====
+
+// Send Bhavcopy Start Notification
+void FakeNSEExchange::send_bhavcopy_start_notification(uint64_t ts, bool is_spread) {
+    MS_BCAST_MESSAGE msg;
+    memset(&msg, 0, sizeof(msg));
+
+    msg.Header.TransactionCode = TransactionCodes::BCAST_JRNL_VCT_MSG;
+    msg.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    msg.Header.ErrorCode = 0;
+    msg.Header.MessageLength = sizeof(MS_BCAST_MESSAGE);
+
+    msg.BCASTDestination.TraderWorkstation = 1;
+    msg.BCASTDestination.JournalingRequired = 1;
+
+    std::string message = is_spread ?
+        "Spread bhavcopy transmission will start now" :
+        "Bhavcopy transmission will start now";
+
+    msg.BroadcastMessageLength = std::min(static_cast<int>(message.length()), 239);
+    strncpy(msg.BroadcastMessage, message.c_str(), 239);
+
+    std::cout << "Sending bhavcopy start notification" << (is_spread ? " (spread)" : "") << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
+    }
+}
+
+// Send Bhavcopy Header
+void FakeNSEExchange::send_bhavcopy_header(char session_type, int32_t report_date, uint64_t ts, bool is_spread) {
+    MS_RP_HDR_RPRT_MARKET_STATS_OUT_RPT header;
+    memset(&header, 0, sizeof(header));
+
+    header.Header.TransactionCode = is_spread ?
+        TransactionCodes::SPD_BC_JRNL_VCT_MSG :
+        TransactionCodes::RPRT_MARKET_STATS_OUT_RPT;
+    header.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    header.Header.ErrorCode = 0;
+    header.Header.Timestamp = ts;
+    header.Header.MessageLength = sizeof(MS_RP_HDR_RPRT_MARKET_STATS_OUT_RPT);
+
+    header.MessageType = session_type;
+    header.ReportDate = report_date;
+    header.UserType = -1;
+
+    std::cout << "Sending bhavcopy header (session: " << session_type << ")" << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&header), sizeof(header));
+    }
+}
+
+// Send Bhavcopy Data (Regular or Enhanced)
+void FakeNSEExchange::send_bhavcopy_data(char session_type, const std::vector<MKT_STATS_DATA>& stats, uint64_t ts, bool enhanced) {
+    char data_type;
+    switch(session_type) {
+        case BhavcopyMessageTypes::HEADER_REGULAR:
+            data_type = BhavcopyMessageTypes::DATA_REGULAR;
+            break;
+        case BhavcopyMessageTypes::HEADER_ADDITIONAL:
+            data_type = BhavcopyMessageTypes::DATA_ADDITIONAL;
+            break;
+        case BhavcopyMessageTypes::HEADER_FINAL:
+            data_type = BhavcopyMessageTypes::DATA_FINAL;
+            break;
+        default:
+            data_type = BhavcopyMessageTypes::DATA_REGULAR;
+    }
+
+    if (enhanced) {
+        size_t max_records = 4;
+        for (size_t i = 0; i < stats.size(); i += max_records) {
+            ENHNCD_MS_RP_MARKET_STATS packet;
+            memset(&packet, 0, sizeof(packet));
+
+            packet.Header.TransactionCode = TransactionCodes::ENHNCD_RPRT_MARKET_STATS_OUT_RPT;
+            packet.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+            packet.Header.ErrorCode = 0;
+            packet.Header.Timestamp = ts;
+            packet.Header.MessageLength = sizeof(ENHNCD_MS_RP_MARKET_STATS);
+
+            packet.MessageType = data_type;
+            packet.NumberOfRecords = std::min(max_records, stats.size() - i);
+
+            for (size_t j = 0; j < packet.NumberOfRecords && (i + j) < stats.size(); j++) {
+                const MKT_STATS_DATA& src = stats[i + j];
+                ENHNCD_MKT_STATS_DATA& dst = packet.MarketStatsData[j];
+
+                dst.ContractDesc = src.ContractDesc;
+                dst.MarketType = src.MarketType;
+                dst.OpenPrice = src.OpenPrice;
+                dst.HighPrice = src.HighPrice;
+                dst.LowPrice = src.LowPrice;
+                dst.ClosingPrice = src.ClosingPrice;
+                dst.TotalQuantityTraded = src.TotalQuantityTraded;
+                dst.TotalValueTraded = src.TotalValueTraded;
+                dst.PreviousClosePrice = src.PreviousClosePrice;
+                dst.OpenInterest = src.OpenInterest;
+                dst.ChgOpenInterest = src.ChgOpenInterest;
+                memcpy(dst.Indicator, src.Indicator, 4);
+            }
+
+            if (message_callback_) {
+                message_callback_(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+            }
+        }
+    } else {
+        for (const auto& stat : stats) {
+            MS_RP_MARKET_STATS packet;
+            memset(&packet, 0, sizeof(packet));
+
+            packet.Header.TransactionCode = TransactionCodes::RPRT_MARKET_STATS_OUT_RPT;
+            packet.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+            packet.Header.ErrorCode = 0;
+            packet.Header.Timestamp = ts;
+            packet.Header.MessageLength = sizeof(MS_RP_MARKET_STATS);
+
+            packet.MessageType = data_type;
+            packet.NumberOfRecords = 1;
+            packet.MarketStatsData = stat;
+
+            if (message_callback_) {
+                message_callback_(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+            }
+        }
+    }
+
+    std::cout << "Sent bhavcopy data: " << stats.size() << " records" << std::endl;
+}
+
+// Send Bhavcopy Trailer
+void FakeNSEExchange::send_bhavcopy_trailer(char session_type, int32_t packet_count, uint64_t ts, bool is_spread) {
+    MS_RP_TRAILER_RPRT_MARKET_STATS_OUT_RPT trailer;
+    memset(&trailer, 0, sizeof(trailer));
+
+    trailer.Header.TransactionCode = is_spread ?
+        TransactionCodes::SPD_BC_JRNL_VCT_MSG :
+        TransactionCodes::RPRT_MARKET_STATS_OUT_RPT;
+    trailer.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    trailer.Header.ErrorCode = 0;
+    trailer.Header.Timestamp = ts;
+    trailer.Header.MessageLength = sizeof(MS_RP_TRAILER_RPRT_MARKET_STATS_OUT_RPT);
+
+    char trailer_type;
+    switch(session_type) {
+        case BhavcopyMessageTypes::HEADER_REGULAR:
+            trailer_type = BhavcopyMessageTypes::TRAILER_REGULAR;
+            break;
+        case BhavcopyMessageTypes::HEADER_ADDITIONAL:
+            trailer_type = BhavcopyMessageTypes::TRAILER_ADDITIONAL;
+            break;
+        case BhavcopyMessageTypes::HEADER_FINAL:
+            trailer_type = BhavcopyMessageTypes::TRAILER_FINAL;
+            break;
+        default:
+            trailer_type = BhavcopyMessageTypes::TRAILER_REGULAR;
+    }
+
+    trailer.MessageType = trailer_type;
+    trailer.NumberOfPackets = packet_count;
+
+    std::cout << "Sending bhavcopy trailer (packets: " << packet_count << ")" << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&trailer), sizeof(trailer));
+    }
+}
+
+// Send Spread Bhavcopy Data
+void FakeNSEExchange::send_spread_bhavcopy_data(char session_type, const std::vector<SPD_STATS_DATA>& stats, uint64_t ts) {
+    char data_type;
+    switch(session_type) {
+        case BhavcopyMessageTypes::HEADER_REGULAR:
+            data_type = BhavcopyMessageTypes::DATA_REGULAR;
+            break;
+        case BhavcopyMessageTypes::HEADER_ADDITIONAL:
+            data_type = BhavcopyMessageTypes::DATA_ADDITIONAL;
+            break;
+        case BhavcopyMessageTypes::HEADER_FINAL:
+            data_type = BhavcopyMessageTypes::DATA_FINAL;
+            break;
+        default:
+            data_type = BhavcopyMessageTypes::DATA_REGULAR;
+    }
+
+    size_t max_records = 3;
+    for (size_t i = 0; i < stats.size(); i += max_records) {
+        RP_SPD_MKT_STATS packet;
+        memset(&packet, 0, sizeof(packet));
+
+        packet.Header.TransactionCode = TransactionCodes::SPD_BC_JRNL_VCT_MSG;
+        packet.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+        packet.Header.ErrorCode = 0;
+        packet.Header.Timestamp = ts;
+        packet.Header.MessageLength = sizeof(RP_SPD_MKT_STATS);
+
+        packet.MessageType = data_type;
+        packet.NoOfRecords = std::min(max_records, stats.size() - i);
+
+        for (size_t j = 0; j < packet.NoOfRecords && (i + j) < stats.size(); j++) {
+            memcpy(&packet.SPDStatsData + j, &stats[i + j], sizeof(SPD_STATS_DATA));
+        }
+
+        if (message_callback_) {
+            message_callback_(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+        }
+    }
+
+    std::cout << "Sent spread bhavcopy data: " << stats.size() << " records" << std::endl;
+}
+
+// Send Spread Bhavcopy Success
+void FakeNSEExchange::send_spread_bhavcopy_success(uint64_t ts) {
+    MS_BCAST_MESSAGE msg;
+    memset(&msg, 0, sizeof(msg));
+
+    msg.Header.TransactionCode = TransactionCodes::BCAST_JRNL_VCT_MSG;
+    msg.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    msg.Header.ErrorCode = 0;
+    msg.Header.MessageLength = sizeof(MS_BCAST_MESSAGE);
+
+    msg.BCASTDestination.TraderWorkstation = 1;
+    msg.BCASTDestination.JournalingRequired = 1;
+
+    std::string message = "Spread bhavcopy broadcasted successfully";
+    msg.BroadcastMessageLength = std::min(static_cast<int>(message.length()), 239);
+    strncpy(msg.BroadcastMessage, message.c_str(), 239);
+
+    std::cout << "Sending spread bhavcopy success notification" << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
+    }
+}
+
+// Send Market Index Report
+void FakeNSEExchange::send_market_index_report(const std::string& index_name, const MKT_INDEX& index_data, uint64_t ts) {
+    MKT_IDX_RPT_DATA report;
+    memset(&report, 0, sizeof(report));
+
+    report.Header.TransactionCode = TransactionCodes::MKT_IDX_RPT_DATA;
+    report.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+    report.Header.ErrorCode = 0;
+    report.Header.Timestamp = ts;
+    report.Header.MessageLength = sizeof(MKT_IDX_RPT_DATA);
+
+    report.MessageType = BhavcopyMessageTypes::DATA_REGULAR;
+    strncpy(report.IndexName, index_name.c_str(), 15);
+    report.Index = index_data;
+
+    std::cout << "Sending market index report: " << index_name << std::endl;
+
+    if (message_callback_) {
+        message_callback_(reinterpret_cast<const uint8_t*>(&report), sizeof(report));
+    }
+}
+
+// Send Industry Index Report
+void FakeNSEExchange::send_industry_index_report(const std::vector<INDUSTRY_INDEX>& industry_data, uint64_t ts) {
+    size_t max_records = 10;
+    for (size_t i = 0; i < industry_data.size(); i += max_records) {
+        IND_IDX_RPT_DATA report;
+        memset(&report, 0, sizeof(report));
+
+        report.Header.TransactionCode = TransactionCodes::IND_IDX_RPT_DATA_CODE;
+        report.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+        report.Header.ErrorCode = 0;
+        report.Header.Timestamp = ts;
+        report.Header.MessageLength = sizeof(IND_IDX_RPT_DATA);
+
+        report.MessageType = BhavcopyMessageTypes::DATA_REGULAR;
+        report.NumberOfIndustryRecords = std::min(max_records, industry_data.size() - i);
+
+        if (report.NumberOfIndustryRecords > 0) {
+            report.IndustryIndex = industry_data[i];
+        }
+
+        if (message_callback_) {
+            message_callback_(reinterpret_cast<const uint8_t*>(&report), sizeof(report));
+        }
+    }
+
+    std::cout << "Sent industry index report: " << industry_data.size() << " records" << std::endl;
+}
+
+// Send Sector Index Report
+void FakeNSEExchange::send_sector_index_report(const std::string& industry_name, const std::vector<INDEX_DATA>& sector_data, uint64_t ts) {
+    size_t max_records = 10;
+    for (size_t i = 0; i < sector_data.size(); i += max_records) {
+        SECT_IDX_RPT_DATA report;
+        memset(&report, 0, sizeof(report));
+
+        report.Header.TransactionCode = TransactionCodes::SECT_IDX_RPT_DATA_CODE;
+        report.Header.LogTime = static_cast<int32_t>(ts / 1000000);
+        report.Header.ErrorCode = 0;
+        report.Header.Timestamp = ts;
+        report.Header.MessageLength = sizeof(SECT_IDX_RPT_DATA);
+
+        report.MessageType = BhavcopyMessageTypes::DATA_REGULAR;
+        strncpy(report.IndustryName, industry_name.c_str(), 15);
+        report.NumberOfIndustryRecords = std::min(max_records, sector_data.size() - i);
+
+        if (report.NumberOfIndustryRecords > 0) {
+            report.IndexData = sector_data[i];
+        }
+
+        if (message_callback_) {
+            message_callback_(reinterpret_cast<const uint8_t*>(&report), sizeof(report));
+        }
+    }
+
+    std::cout << "Sent sector index report for " << industry_name << ": " << sector_data.size() << " sectors" << std::endl;
+}
+
+// Generate and Broadcast Complete Bhavcopy
+void FakeNSEExchange::generate_and_broadcast_bhavcopy(char session_type, uint64_t ts) {
+    std::cout << "=== Generating Bhavcopy (Session: " << session_type << ") ===" << std::endl;
+
+    send_bhavcopy_start_notification(ts, false);
+
+    int32_t report_date = static_cast<int32_t>(ts / 1000000);
+    send_bhavcopy_header(session_type, report_date, ts, false);
+
+    std::vector<MKT_STATS_DATA> stats;
+    for (const auto& pair : market_statistics_) {
+        stats.push_back(pair.second);
+    }
+
+    if (!stats.empty()) {
+        send_bhavcopy_data(session_type, stats, ts, false);
+    }
+
+    int32_t packet_count = stats.empty() ? 0 : stats.size();
+    send_bhavcopy_trailer(session_type, packet_count, ts, false);
+
+    for (const auto& pair : market_indices_) {
+        send_market_index_report(pair.first, pair.second, ts);
+    }
+
+    for (const auto& pair : industry_indices_) {
+        if (!pair.second.empty()) {
+            send_industry_index_report(pair.second, ts);
+        }
+    }
+
+    for (const auto& pair : sector_indices_) {
+        if (!pair.second.empty()) {
+            send_sector_index_report(pair.first, pair.second, ts);
+        }
+    }
+
+    std::cout << "=== Bhavcopy Complete ===" << std::endl;
+}
+
+// Generate and Broadcast Spread Bhavcopy
+void FakeNSEExchange::generate_and_broadcast_spread_bhavcopy(char session_type, uint64_t ts) {
+    std::cout << "=== Generating Spread Bhavcopy (Session: " << session_type << ") ===" << std::endl;
+
+    send_bhavcopy_start_notification(ts, true);
+
+    int32_t report_date = static_cast<int32_t>(ts / 1000000);
+    send_bhavcopy_header(session_type, report_date, ts, true);
+
+    std::vector<SPD_STATS_DATA> stats;
+    for (const auto& pair : spread_statistics_) {
+        stats.push_back(pair.second);
+    }
+
+    if (!stats.empty()) {
+        send_spread_bhavcopy_data(session_type, stats, ts);
+    }
+
+    int32_t packet_count = 0;
+    send_bhavcopy_trailer(session_type, packet_count, ts, true);
+
+    send_spread_bhavcopy_success(ts);
+
+    std::cout << "=== Spread Bhavcopy Complete ===" << std::endl;
 }
